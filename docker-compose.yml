@@ -1,0 +1,23 @@
+# Docker Compose — Debate Coach Infrastructure
+# Usage: docker compose up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: debate-coach-db
+    environment:
+      POSTGRES_USER: debate
+      POSTGRES_PASSWORD: debate_pass
+      POSTGRES_DB: debate_coach
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U debate -d debate_coach"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
