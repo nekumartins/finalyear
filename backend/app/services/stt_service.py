@@ -78,17 +78,25 @@ def _pcm16_to_wav(pcm_bytes: bytes, sample_rate: int = 16000, channels: int = 1)
 
 class CloudSTTService(STTService):
     """
-    Cloud Path: OpenAI Whisper API.
+    Cloud Path: Groq Whisper API (whisper-large-v3-turbo).
 
     Buffers PCM16 audio chunks and sends to Whisper every ~2 seconds.
     16kHz mono PCM16 = 32,000 bytes/sec → buffer threshold = 64,000 bytes (~2s).
+
+    Why Groq over OpenAI:
+      - Free tier (6K requests/day)
+      - Same Whisper model, faster inference (Groq LPU)
+      - OpenAI-compatible API — zero code change needed
     """
 
     BUFFER_THRESHOLD = 64_000  # ~2 seconds of 16kHz mono PCM16
 
     def __init__(self):
         settings = get_settings()
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self.client = AsyncOpenAI(
+            api_key=settings.groq_api_key,
+            base_url=settings.groq_base_url,
+        )
         self._buffer = bytearray()
         self._full_transcript = ""
 
@@ -118,7 +126,7 @@ class CloudSTTService(STTService):
             audio_file.name = "audio.wav"
 
             response = await self.client.audio.transcriptions.create(
-                model="whisper-1",
+                model="whisper-large-v3-turbo",
                 file=audio_file,
                 language="en",
                 response_format="text",
@@ -143,7 +151,7 @@ class CloudSTTService(STTService):
 
         try:
             response = await self.client.audio.transcriptions.create(
-                model="whisper-1",
+                model="whisper-large-v3-turbo",
                 file=audio_file,
                 language="en",
                 response_format="text",

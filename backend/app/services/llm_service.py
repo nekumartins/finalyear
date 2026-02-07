@@ -2,13 +2,14 @@
 Service: LLM Debate Engine — Module 4 (Cloud) / Module 5 (Edge)
 
 Generates AI counter-arguments during debate.
-Cloud: GPT-4o-mini via OpenAI API (streamed token-by-token)
+Cloud: Llama 3.3 70B via Groq API (streamed token-by-token)
 Edge:  Llama-2 via llama.cpp (built in Phase 7)
 
-Why GPT-4o-mini over GPT-4:
-  - 10x cheaper, still strong debate reasoning
-  - Faster first-token latency (~300ms vs ~800ms)
-  - Upgrade to GPT-4 is a one-line model name change
+Why Groq + Llama 3.3 70B:
+  - FREE tier (6K req/day) — no credit card needed
+  - ~500 tok/s on Groq LPU — fastest inference available
+  - Strong debate/reasoning ability at 70B scale
+  - OpenAI-compatible API — drop-in replacement
 """
 import logging
 from abc import ABC, abstractmethod
@@ -50,12 +51,15 @@ class LLMService(ABC):
 
 
 class CloudLLMService(LLMService):
-    """Cloud Path: OpenAI GPT-4o-mini with streaming."""
+    """Cloud Path: Groq Llama 3.3 70B with streaming."""
 
     def __init__(self):
         settings = get_settings()
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
-        self.model = "gpt-4o-mini"  # Change to "gpt-4o" for higher quality
+        self.client = AsyncOpenAI(
+            api_key=settings.groq_api_key,
+            base_url=settings.groq_base_url,
+        )
+        self.model = "llama-3.3-70b-versatile"  # Free on Groq, strong at debate
 
     async def generate_response_stream(
         self, user_text, topic, user_position, conversation_history

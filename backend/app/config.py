@@ -13,8 +13,9 @@ class Settings(BaseSettings):
     # Auth
     secret_key: str = "change-me-in-production"
 
-    # OpenAI (Cloud Path)
-    openai_api_key: str = ""
+    # Groq API (Cloud Path) — free at console.groq.com
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
 
     # Server
     host: str = "0.0.0.0"
