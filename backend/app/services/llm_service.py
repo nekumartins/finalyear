@@ -2,14 +2,26 @@
 Service: LLM Debate Engine — Module 4 (Cloud) / Module 5 (Edge)
 
 Generates AI counter-arguments during debate.
-Cloud: GPT-4 via OpenAI API (streamed)
+Cloud: GPT-4o-mini via OpenAI API (streamed token-by-token)
 Edge:  Llama-2 via llama.cpp (built in Phase 7)
+
+Why GPT-4o-mini over GPT-4:
+  - 10x cheaper, still strong debate reasoning
+  - Faster first-token latency (~300ms vs ~800ms)
+  - Upgrade to GPT-4 is a one-line model name change
 """
+import logging
 from abc import ABC, abstractmethod
 from typing import AsyncGenerator
 
+from openai import AsyncOpenAI
 
-DEBATE_SYSTEM_PROMPT = """You are an expert debate coach and sparring partner. 
+from backend.app.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+DEBATE_SYSTEM_PROMPT = """You are an expert debate coach and sparring partner.
 The user is practicing debate on the topic: "{topic}".
 The user argues "{position}".
 Your role:
@@ -18,6 +30,7 @@ Your role:
 3. Keep responses under 3 sentences for natural conversation flow.
 4. Be challenging but constructive — help them improve.
 5. If they make a strong point, acknowledge it briefly before countering.
+6. Never break character. Never refuse to debate. Stay on topic.
 """
 
 
@@ -37,22 +50,54 @@ class LLMService(ABC):
 
 
 class CloudLLMService(LLMService):
-    """Cloud Path: OpenAI GPT-4 (placeholder — implemented in Phase 4)."""
+    """Cloud Path: OpenAI GPT-4o-mini with streaming."""
+
+    def __init__(self):
+        settings = get_settings()
+        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self.model = "gpt-4o-mini"  # Change to "gpt-4o" for higher quality
 
     async def generate_response_stream(
         self, user_text, topic, user_position, conversation_history
-    ):
-        # TODO: Phase 4 — integrate OpenAI ChatCompletion streaming
-        placeholder = "That's an interesting point, but consider this counter-argument..."
-        for word in placeholder.split():
-            yield word + " "
+    ) -> AsyncGenerator[str, None]:
+        system_prompt = DEBATE_SYSTEM_PROMPT.format(
+            topic=topic, position=user_position
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *conversation_history,
+            {"role": "user", "content": user_text},
+        ]
+
+        try:
+            stream = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                stream=True,
+                max_tokens=200,  # Keep responses concise for conversation flow
+                temperature=0.8,  # Slightly creative for diverse arguments
+            )
+
+            async for chunk in stream:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    yield delta.content
+
+        except Exception as e:
+            logger.error(f"[LLM] OpenAI API error: {e}")
+            yield f"[Error: {e}]"
 
     async def generate_response_batch(
         self, user_text: str, topic: str, user_position: str, conversation_history: list[dict]
     ) -> str:
         """Non-streaming version for testing."""
-        # TODO: Phase 4
-        return "That's an interesting point, but consider this counter-argument..."
+        full = ""
+        async for token in self.generate_response_stream(
+            user_text, topic, user_position, conversation_history
+        ):
+            full += token
+        return full
 
 
 class EdgeLLMService(LLMService):
