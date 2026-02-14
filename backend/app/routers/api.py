@@ -4,12 +4,16 @@ The real-time work happens over WebSocket; this is for:
   - Listing past sessions
   - Retrieving session details/metrics
   - Health check
+
+All session endpoints are protected — users can only see their own sessions.
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.db.models import Session, User
 from backend.app.db.session import get_db
-from backend.app.services.session_service import session_service
+from backend.app.services.auth_service import get_current_user
 
 router = APIRouter(prefix="/api", tags=["sessions"])
 
@@ -20,8 +24,19 @@ async def health_check():
 
 
 @router.get("/sessions")
-async def list_sessions(limit: int = 20, db: AsyncSession = Depends(get_db)):
-    sessions = await session_service.list_sessions(db, limit=limit)
+async def list_sessions(
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List the current user's debate sessions."""
+    result = await db.execute(
+        select(Session)
+        .where(Session.user_id == user.id)
+        .order_by(Session.started_at.desc())
+        .limit(limit)
+    )
+    sessions = result.scalars().all()
     return [
         {
             "id": s.id,
@@ -36,10 +51,18 @@ async def list_sessions(limit: int = 20, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/sessions/{session_id}")
-async def get_session(session_id: str, db: AsyncSession = Depends(get_db)):
-    session = await session_service.get_session(db, session_id)
+async def get_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get details of a specific session (must belong to current user)."""
+    result = await db.execute(
+        select(Session).where(Session.id == session_id, Session.user_id == user.id)
+    )
+    session = result.scalar_one_or_none()
     if not session:
-        return {"error": "Session not found"}
+        raise HTTPException(status_code=404, detail="Session not found")
     return {
         "id": session.id,
         "topic": session.topic,

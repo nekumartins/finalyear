@@ -14,11 +14,28 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    """A registered user of the debate coach."""
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    hashed_password = Column(String(255), nullable=True)  # Null for OAuth-only users
+    auth_provider = Column(String(20), default="local")   # "local" or "google"
+    google_id = Column(String(255), unique=True, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
+
+
 class Session(Base):
     """A single debate session between user and AI."""
     __tablename__ = "sessions"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     mode = Column(Enum("cloud", "edge", name="session_mode"), nullable=False)
     topic = Column(Text, nullable=False)
     user_position = Column(String(10), nullable=False)
@@ -36,6 +53,7 @@ class Session(Base):
     user_talk_ratio = Column(Float, nullable=True)
 
     # Relationships
+    user = relationship("User", back_populates="sessions")
     transcript_entries = relationship("TranscriptEntry", back_populates="session", cascade="all, delete-orphan")
 
 
