@@ -1,17 +1,22 @@
 """
 Debate Coach Backend — FastAPI Application Entry Point
 
-Run with:
-    conda activate debate-coach
+Run locally:
     uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
+
+Run via Docker:
+    docker compose up --build
 """
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from backend.app.config import get_settings
 from backend.app.routers.api import router as api_router
+from backend.app.routers.auth import router as auth_router
 from backend.app.routers.ws_handler import DebateWebSocketHandler
 
 logging.basicConfig(level=logging.INFO)
@@ -25,10 +30,14 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# CORS — allow mobile app to connect
+# CORS — allow frontend to connect (dev: Vite on localhost:5173)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Tighten in production
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,6 +45,7 @@ app.add_middleware(
 
 # REST routes
 app.include_router(api_router)
+app.include_router(auth_router)
 
 
 # WebSocket endpoint
@@ -43,6 +53,17 @@ app.include_router(api_router)
 async def websocket_debate(websocket: WebSocket):
     handler = DebateWebSocketHandler(websocket)
     await handler.handle()
+
+
+# ── Static Frontend (Docker production build) ─────────────
+# In Docker, the Vite build output is copied to /app/static/
+# Serve it as a single-page app (catch-all → index.html)
+STATIC_DIR = Path("/app/static")
+if STATIC_DIR.is_dir():
+    logger.info(f"📦 Serving frontend from {STATIC_DIR}")
+    app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+else:
+    logger.info("🔧 No static frontend found (running in dev mode)")
 
 
 @app.on_event("startup")

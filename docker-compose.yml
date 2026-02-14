@@ -1,7 +1,8 @@
-# Docker Compose — Debate Coach Infrastructure
-# Usage: docker compose up -d
+# Docker Compose — Debate Coach (Full Stack)
+# Usage: docker compose up --build -d
 
 services:
+  # ── PostgreSQL ──────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: debate-coach-db
@@ -18,6 +19,24 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # ── Backend + Frontend (single container) ───
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: debate-coach-app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override DB host to point to Docker network
+      DATABASE_URL: postgresql+asyncpg://debate:debate_pass@postgres:5432/debate_coach
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   pgdata:

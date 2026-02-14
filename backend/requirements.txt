@@ -16,10 +16,14 @@ sqlalchemy==2.0.46
 asyncpg==0.31.0
 alembic==1.18.3
 
-# HTTP client (for OpenAI API calls)
+# HTTP client (for OpenAI/Groq API calls)
 httpx==0.28.1
+openai>=1.0.0
+
+# Auth
+pyjwt>=2.8.0
+passlib[bcrypt]>=1.7.4
 
 # Testing
 pytest==8.3.5
 pytest-asyncio==0.25.0
-httpx==0.28.1

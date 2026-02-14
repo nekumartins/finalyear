@@ -1,0 +1,35 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+*.egg-info
+
+# Node
+web/node_modules
+web/dist
+
+# IDE
+.vscode
+.idea
+*.swp
+
+# Environment
+.env
+.env.local
+
+# Docker
+docker-compose.yml
+Dockerfile
+
+# Models (large binary files)
+models/
+
+# Misc
+*.pdf
+*.md
