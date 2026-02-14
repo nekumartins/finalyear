@@ -61,6 +61,7 @@ interface DebateState {
   finalizeAiResponse: () => void;
   setTurnSignal: (signal: TurnSignal, confidence: number) => void;
   setMetrics: (metrics: SessionMetrics) => void;
+  loadSession: (sessionId: string) => Promise<boolean>;
   reset: () => void;
 }
 
@@ -123,6 +124,40 @@ export const useDebateStore = create<DebateState>((set, get) => ({
 
   setMetrics: (metrics) =>
     set({ metrics, status: "ended" }),
+
+  loadSession: async (sessionId) => {
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`/api/sessions/${sessionId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+
+      set({
+        sessionId: data.id,
+        topic: data.topic,
+        mode: data.mode,
+        userPosition: data.user_position,
+        status: "ended", // Valid state for viewing history
+        transcript: data.transcript || [],
+        metrics: {
+          durationSeconds: data.duration_seconds,
+          userWpm: data.user_wpm,
+          aiWpm: data.ai_wpm,
+          fillerWordCount: data.filler_word_count,
+          fillerWords: data.filler_words || {},
+          avgPauseDurationMs: data.avg_pause_duration_ms,
+          turnCount: data.turn_count,
+          userTalkRatio: data.user_talk_ratio,
+        },
+      });
+      return true;
+    } catch (e) {
+      console.error("Failed to load session", e);
+      return false;
+    }
+  },
 
   reset: () => set(initialState),
 }));

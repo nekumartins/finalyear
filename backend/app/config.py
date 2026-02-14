@@ -32,7 +32,11 @@ class Settings(BaseSettings):
     # Default mode
     default_mode: str = "cloud"
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 @lru_cache()

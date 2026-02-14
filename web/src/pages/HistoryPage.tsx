@@ -46,7 +46,12 @@ export function HistoryPage() {
       <h1 style={{ marginBottom: "24px" }}>📋 Session History</h1>
       <div style={styles.list}>
         {sessions.map((s) => (
-          <div key={s.id} className="card" style={styles.card}>
+          <div
+            key={s.id}
+            className="card"
+            style={styles.card}
+            onClick={() => window.location.href = `/history/${s.id}`} // using full reload for simplicity or useNavigate
+          >
             <div style={styles.row}>
               <h3 style={styles.topic}>{s.topic}</h3>
               <span style={styles.modeBadge}>

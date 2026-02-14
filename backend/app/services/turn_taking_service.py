@@ -133,10 +133,15 @@ class HybridTurnTakingService(TurnTakingService):
         if self._has_silero and self._silero_vad is not None:
             try:
                 import torch
+                import time
+                t_vad_start = time.time()
                 num_samples = len(audio_bytes) // 2
                 samples = struct.unpack(f"<{num_samples}h", audio_bytes[:num_samples * 2])
                 tensor = torch.FloatTensor(samples) / 32768.0
                 silero_prob = float(self._silero_vad(tensor, sample_rate))
+                t_vad_dur = time.time() - t_vad_start
+                if t_vad_dur > 0.05:
+                     logger.warning(f"[Perf] Silero VAD took {t_vad_dur:.3f}s")
             except Exception:
                 silero_prob = 0.0
 

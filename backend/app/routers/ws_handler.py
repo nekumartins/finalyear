@@ -188,6 +188,7 @@ class DebateWebSocketHandler:
         msg = AudioChunkMsg(**data)
         audio_bytes = base64.b64decode(msg.chunk_b64)
         client_ts = msg.timestamp_ms
+        logger.debug(f"[Audio] Received chunk: {len(audio_bytes)} bytes, queue size: {self._audio_queue.qsize()}")
 
         # Backpressure: if queue is full, drop oldest chunk
         if self._audio_queue.full():
@@ -253,9 +254,11 @@ class DebateWebSocketHandler:
 
     async def _audio_processor_loop(self) -> None:
         """Background task: processes queued audio chunks for STT + turn-taking."""
+        logger.info(f"[Processor] Audio processor started for session {self.session_id}")
         try:
             while True:
                 audio_bytes, client_ts = await self._audio_queue.get()
+                logger.debug(f"[Processor] Processing chunk: {len(audio_bytes)} bytes")
                 await self._process_audio(audio_bytes, client_ts)
         except asyncio.CancelledError:
             logger.info("[Processor] Audio processor stopped")
@@ -264,13 +267,17 @@ class DebateWebSocketHandler:
 
     async def _process_audio(self, audio_bytes: bytes, client_ts: int) -> None:
         """Process a single audio chunk: VAD + STT + turn decision."""
-
+        
+        t0 = time.time()
         # ── Latency: record audio arrival ──
         self.latency.record("audio_received", client_ts_ms=client_ts)
 
         # ── 1. Turn-taking analysis ──
         prediction = await self.turn_taking_service.analyze_chunk(audio_bytes)
-
+        t1 = time.time()
+        if (t1 - t0) > 0.1:
+            logger.warning(f"[Perf] TurnJudging took {t1-t0:.3f}s")
+        
         if prediction.should_ai_speak:
             signal = "ai_should_speak"
         elif prediction.is_speech:
@@ -301,6 +308,9 @@ class DebateWebSocketHandler:
 
         # ── 2. Speech-to-Text (buffered) ──
         stt_result = await self.stt_service.transcribe_chunk(audio_bytes)
+        t2 = time.time()
+        if (t2 - t1) > 0.1:
+            logger.warning(f"[Perf] STT took {t2-t1:.3f}s")
 
         if stt_result and stt_result.get("text"):
             self.latency.record("stt_result")

@@ -125,12 +125,18 @@ class CloudSTTService(STTService):
             audio_file = io.BytesIO(wav_bytes)
             audio_file.name = "audio.wav"
 
+            import time
+            start_t = time.time()
+            logger.info(f"[STT] Calling Groq API with {len(wav_bytes)} bytes...")
+
             response = await self.client.audio.transcriptions.create(
                 model="whisper-large-v3-turbo",
                 file=audio_file,
                 language="en",
                 response_format="text",
             )
+            dur = time.time() - start_t
+            logger.info(f"[STT] Groq API returned in {dur:.2f}s")
 
             text = response.strip() if isinstance(response, str) else response.text.strip()
 

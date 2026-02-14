@@ -5,6 +5,7 @@ import { HomePage } from "./pages/HomePage";
 import { DebatePage } from "./pages/DebatePage";
 import { MetricsPage } from "./pages/MetricsPage";
 import { HistoryPage } from "./pages/HistoryPage";
+import { SessionPage } from "./pages/SessionPage";
 import { AuthPage } from "./pages/AuthPage";
 import { Layout } from "./components/Layout";
 import { ProtectedRoute } from "./components/ProtectedRoute";
@@ -29,6 +30,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="/debate" element={<DebatePage />} />
               <Route path="/metrics" element={<MetricsPage />} />
               <Route path="/history" element={<HistoryPage />} />
+              <Route path="/history/:sessionId" element={<SessionPage />} />
             </Route>
           </Route>
         </Routes>

@@ -12,8 +12,9 @@ import { useCallback, useEffect, useRef } from "react";
 import { useDebateStore } from "../stores/debateStore";
 
 const getWsUrl = () => {
-  const base = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/debate`;
-  const token = localStorage.getItem("access_token");
+  // Direct connection to bypass Vite proxy issues
+  const base = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//127.0.0.1:8000/ws/debate`;
+  const token = localStorage.getItem("token");
   return token ? `${base}?token=${token}` : base;
 };
 
@@ -158,16 +159,22 @@ export function useWebSocket() {
       setStatus("connecting");
       connect();
       // Wait for connection before sending
+      let attempts = 0;
       const checkAndSend = () => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
+        if (!wsRef.current) return; // Stop if disconnected/unmounted
+
+        if (wsRef.current.readyState === WebSocket.OPEN) {
           send({
             type: "start_session",
             topic,
             user_position: userPosition,
             mode,
           });
-        } else {
+        } else if (attempts < 50) { // Timeout after ~5s
+          attempts++;
           setTimeout(checkAndSend, 100);
+        } else {
+          console.error("[WS] Connection timeout - could not start session");
         }
       };
       checkAndSend();

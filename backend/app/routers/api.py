@@ -11,6 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy.orm import selectinload
+
 from backend.app.db.models import Session, User
 from backend.app.db.session import get_db
 from backend.app.services.auth_service import get_current_user
@@ -58,7 +60,9 @@ async def get_session(
 ):
     """Get details of a specific session (must belong to current user)."""
     result = await db.execute(
-        select(Session).where(Session.id == session_id, Session.user_id == user.id)
+        select(Session)
+        .where(Session.id == session_id, Session.user_id == user.id)
+        .options(selectinload(Session.transcript_entries))
     )
     session = result.scalar_one_or_none()
     if not session:
@@ -77,5 +81,15 @@ async def get_session(
         "filler_words": session.filler_words_json,
         "avg_pause_duration_ms": session.avg_pause_duration_ms,
         "turn_count": session.turn_count,
+        "turn_count": session.turn_count,
         "user_talk_ratio": session.user_talk_ratio,
+        "transcript": [
+            {
+                "speaker": t.speaker,
+                "text": t.text,
+                "startMs": t.start_ms,
+                "endMs": t.end_ms,
+            }
+            for t in session.transcript_entries
+        ],
     }
