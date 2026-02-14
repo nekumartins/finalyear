@@ -86,3 +86,16 @@ button:active {
   border-radius: var(--radius);
   padding: 24px;
 }
+
+/* ── Input Focus ── */
+
+input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px rgba(108, 99, 255, 0.15);
+}
+
+/* ── Spinner ── */
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
