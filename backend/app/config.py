@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://debate:debate_pass@localhost:5432/debate_coach"
 
     # Auth
-    secret_key: str = "change-me-in-production"
+    secret_key: str = "change-me-generate-with-openssl-rand-hex-32"
 
     # Groq API (Cloud Path) — free at console.groq.com
     groq_api_key: str = ""

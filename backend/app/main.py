@@ -8,6 +8,7 @@ Run via Docker:
     docker compose up --build
 """
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket
@@ -24,10 +25,21 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown lifecycle."""
+    logger.info(f"🎙️ Debate Coach Backend starting (mode={settings.default_mode})")
+    logger.info(f"📡 WebSocket endpoint: ws://{settings.host}:{settings.port}/ws/debate")
+    yield
+    logger.info("Debate Coach Backend shutting down")
+
+
 app = FastAPI(
     title="Debate Coach API",
     description="Real-Time AI Debate Coach with Predictive Turn-Taking",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # CORS — allow frontend to connect (dev: Vite on localhost:5173)
@@ -64,14 +76,3 @@ if STATIC_DIR.is_dir():
     app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 else:
     logger.info("🔧 No static frontend found (running in dev mode)")
-
-
-@app.on_event("startup")
-async def startup():
-    logger.info(f"🎙️ Debate Coach Backend starting (mode={settings.default_mode})")
-    logger.info(f"📡 WebSocket endpoint: ws://{settings.host}:{settings.port}/ws/debate")
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    logger.info("Debate Coach Backend shutting down")
