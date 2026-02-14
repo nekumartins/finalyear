@@ -5,16 +5,37 @@
  * - Connect/disconnect lifecycle
  * - Sending typed messages (audio chunks, session control)
  * - Parsing incoming messages and dispatching to Zustand store
- * - Auto-reconnect on disconnect
+ * - Auto-reconnect with exponential backoff
+ * - Client-side heartbeat (ping every 15s)
  */
 import { useCallback, useEffect, useRef } from "react";
 import { useDebateStore } from "../stores/debateStore";
 
-const WS_URL = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/debate`;
+const getWsUrl = () => {
+  const base = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/debate`;
+  const token = localStorage.getItem("access_token");
+  return token ? `${base}?token=${token}` : base;
+};
+
+// Stability constants (Phase 7)
+const HEARTBEAT_INTERVAL_MS = 15_000;     // Ping every 15s
+const RECONNECT_BASE_DELAY_MS = 1_000;    // Start at 1s
+const RECONNECT_MAX_DELAY_MS = 30_000;    // Cap at 30s
+const MAX_RECONNECT_ATTEMPTS = 10;
 
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
+  const heartbeatTimer = useRef<ReturnType<typeof setInterval>>();
+  const reconnectAttempts = useRef(0);
+
+  // Track last session info for resume
+  const lastSessionRef = useRef<{
+    sessionId: string;
+    topic: string;
+    userPosition: string;
+    mode: "cloud" | "edge";
+  } | null>(null);
 
   const {
     setSessionId,
@@ -26,14 +47,36 @@ export function useWebSocket() {
     setMetrics,
   } = useDebateStore();
 
+  // ── Heartbeat ─────────────────────────────────────
+
+  const startHeartbeat = useCallback(() => {
+    stopHeartbeat();
+    heartbeatTimer.current = setInterval(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "ping" }));
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }, []);
+
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatTimer.current) {
+      clearInterval(heartbeatTimer.current);
+      heartbeatTimer.current = undefined;
+    }
+  }, []);
+
+  // ── Connection ────────────────────────────────────
+
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(getWsUrl());
     wsRef.current = ws;
 
     ws.onopen = () => {
       console.log("[WS] Connected");
+      reconnectAttempts.current = 0;
+      startHeartbeat();
     };
 
     ws.onmessage = (event) => {
@@ -47,23 +90,55 @@ export function useWebSocket() {
 
     ws.onclose = () => {
       console.log("[WS] Disconnected");
-      // Auto-reconnect after 2s if session was active
+      stopHeartbeat();
+
+      // Auto-reconnect with exponential backoff if session was active
       const status = useDebateStore.getState().status;
-      if (status === "active") {
-        reconnectTimer.current = setTimeout(connect, 2000);
+      if (status === "active" && reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
+        const delay = Math.min(
+          RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectAttempts.current),
+          RECONNECT_MAX_DELAY_MS
+        );
+        reconnectAttempts.current += 1;
+        console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectAttempts.current})`);
+        reconnectTimer.current = setTimeout(() => {
+          connect();
+          // Re-start session on reconnect if we had one
+          if (lastSessionRef.current) {
+            const { topic, userPosition, mode } = lastSessionRef.current;
+            const checkAndResend = () => {
+              if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(
+                  JSON.stringify({
+                    type: "start_session",
+                    topic,
+                    user_position: userPosition,
+                    mode,
+                  })
+                );
+              } else {
+                setTimeout(checkAndResend, 100);
+              }
+            };
+            checkAndResend();
+          }
+        }, delay);
       }
     };
 
     ws.onerror = (err) => {
       console.error("[WS] Error:", err);
     };
-  }, []);
+  }, [startHeartbeat, stopHeartbeat]);
 
   const disconnect = useCallback(() => {
     clearTimeout(reconnectTimer.current);
+    stopHeartbeat();
+    reconnectAttempts.current = MAX_RECONNECT_ATTEMPTS; // Prevent auto-reconnect
     wsRef.current?.close();
     wsRef.current = null;
-  }, []);
+    lastSessionRef.current = null;
+  }, [stopHeartbeat]);
 
   const send = useCallback((msg: Record<string, unknown>) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -77,6 +152,9 @@ export function useWebSocket() {
 
   const startSession = useCallback(
     (topic: string, userPosition: string, mode: "cloud" | "edge") => {
+      // Save for reconnection
+      lastSessionRef.current = { sessionId: "", topic, userPosition, mode };
+
       setStatus("connecting");
       connect();
       // Wait for connection before sending
@@ -104,6 +182,7 @@ export function useWebSocket() {
         session_id: sessionId,
         chunk_b64: chunkB64,
         timestamp_ms: Date.now(),
+        sample_rate: 16000,
       });
     },
     [send]
@@ -112,6 +191,7 @@ export function useWebSocket() {
   const endSession = useCallback(
     (sessionId: string) => {
       send({ type: "end_session", session_id: sessionId });
+      lastSessionRef.current = null; // Don't reconnect after intentional end
     },
     [send]
   );
@@ -123,6 +203,10 @@ export function useWebSocket() {
       case "session_created":
         setSessionId(msg.session_id as string);
         setStatus("active");
+        // Update stored session ID for reconnect
+        if (lastSessionRef.current) {
+          lastSessionRef.current.sessionId = msg.session_id as string;
+        }
         break;
 
       case "transcript_update":
