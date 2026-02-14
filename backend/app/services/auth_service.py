@@ -2,19 +2,18 @@
 Service: Authentication — JWT tokens + password hashing.
 
 Provides:
-  - Password hashing (bcrypt via passlib)
+  - Password hashing (bcrypt)
   - JWT access token creation/verification
   - FastAPI dependencies for protected routes
-  - Google OAuth token verification
 """
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,13 +25,15 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # ── Password Hashing ────────────────────────────
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    """Hash a password using bcrypt."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    """Verify a password against its bcrypt hash."""
+    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
 # ── JWT Tokens ───────────────────────────────────
@@ -112,7 +113,7 @@ async def get_optional_user(
         return None
 
 
-def verify_ws_token(token: str) -> dict:
+def verify_ws_token(token: str) -> Optional[dict]:
     """Verify a JWT for WebSocket connections (no HTTPException, returns payload or None)."""
     try:
         return jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
