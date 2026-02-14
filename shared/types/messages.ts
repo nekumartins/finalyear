@@ -25,6 +25,7 @@ export interface AudioChunkMsg {
   session_id: string;
   chunk_b64: string;
   timestamp_ms: number;
+  sample_rate: number;
 }
 
 export interface EndSessionMsg {
@@ -86,6 +87,11 @@ export interface SessionMetricsMsg {
   turn_count: number;
   user_talk_ratio: number;
   transcript: TranscriptEntry[];
+  latency_report: {
+    events: Array<{ name: string; server_ms: number; client_ms?: number }>;
+    deltas: Record<string, number>;
+    total_events: number;
+  };
 }
 
 export interface ErrorMsg {

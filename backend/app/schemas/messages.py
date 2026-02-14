@@ -46,6 +46,7 @@ class AudioChunkMsg(BaseModel):
     session_id: str
     chunk_b64: str = Field(..., description="Base64-encoded audio bytes")
     timestamp_ms: int = Field(..., description="Client-side timestamp in ms")
+    sample_rate: int = Field(default=16000, description="Audio sample rate in Hz")
 
 
 class EndSessionMsg(BaseModel):
@@ -112,6 +113,7 @@ class SessionMetricsMsg(BaseModel):
     turn_count: int
     user_talk_ratio: float = Field(..., ge=0.0, le=1.0)
     transcript: list[TranscriptEntry] = Field(default_factory=list)
+    latency_report: dict = Field(default_factory=dict)
 
 
 class TranscriptEntry(BaseModel):

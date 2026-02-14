@@ -4,10 +4,9 @@
  * Captures PCM16 mono 16kHz audio in 100ms chunks, encodes to base64,
  * and calls the provided callback with each chunk.
  *
- * Why 100ms chunks:
- * - Small enough for real-time turn-taking analysis (~200ms human reaction)
- * - Large enough to avoid excessive WebSocket overhead
- * - 16kHz mono PCM16 = 3,200 bytes per chunk = trivial bandwidth
+ * IMPORTANT: Browsers may ignore the requested sampleRate constraint
+ * and give the hardware default (44100 or 48000 Hz). This hook detects
+ * the mismatch and resamples to the target rate before encoding.
  */
 import { useCallback, useRef, useState } from "react";
 
@@ -15,6 +14,24 @@ interface AudioCaptureOptions {
   onChunk: (chunkB64: string) => void;
   sampleRate?: number;
   chunkDurationMs?: number;
+}
+
+/**
+ * Downsample Float32 audio from srcRate to dstRate using linear interpolation.
+ */
+function resample(input: Float32Array, srcRate: number, dstRate: number): Float32Array {
+  if (srcRate === dstRate) return input;
+  const ratio = srcRate / dstRate;
+  const outputLength = Math.round(input.length / ratio);
+  const output = new Float32Array(outputLength);
+  for (let i = 0; i < outputLength; i++) {
+    const srcIndex = i * ratio;
+    const low = Math.floor(srcIndex);
+    const high = Math.min(low + 1, input.length - 1);
+    const frac = srcIndex - low;
+    output[i] = input[low] * (1 - frac) + input[high] * frac;
+  }
+  return output;
 }
 
 export function useAudioCapture({
@@ -43,23 +60,35 @@ export function useAudioCapture({
       streamRef.current = stream;
       setHasPermission(true);
 
-      // Create audio context
+      // Create audio context — browser may give a different rate than requested
       const ctx = new AudioContext({ sampleRate });
       contextRef.current = ctx;
+      const actualRate = ctx.sampleRate;
+
+      if (actualRate !== sampleRate) {
+        console.warn(
+          `[Audio] Requested ${sampleRate}Hz, got ${actualRate}Hz — will resample`
+        );
+      }
 
       const source = ctx.createMediaStreamSource(stream);
 
       // ScriptProcessorNode for chunk extraction
-      // bufferSize = sampleRate * chunkDurationMs / 1000
+      // bufferSize based on ACTUAL rate to get ~chunkDurationMs of audio
       const bufferSize = Math.pow(
         2,
-        Math.ceil(Math.log2(sampleRate * (chunkDurationMs / 1000)))
+        Math.ceil(Math.log2(actualRate * (chunkDurationMs / 1000)))
       );
       const processor = ctx.createScriptProcessor(bufferSize, 1, 1);
       processorRef.current = processor;
 
       processor.onaudioprocess = (event) => {
-        const float32 = event.inputBuffer.getChannelData(0);
+        let float32 = event.inputBuffer.getChannelData(0);
+
+        // Resample to target rate if browser gave a different rate
+        if (actualRate !== sampleRate) {
+          float32 = resample(float32, actualRate, sampleRate);
+        }
 
         // Convert Float32 → PCM16
         const pcm16 = new Int16Array(float32.length);
