@@ -3,13 +3,14 @@
  */
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { GoogleLogin } from "@react-oauth/google";
 import { useAuthStore } from "../stores/authStore";
 
 type AuthTab = "login" | "register";
 
 export function AuthPage() {
     const navigate = useNavigate();
-    const { login, register, error, isLoading, clearError } = useAuthStore();
+    const { login, register, loginWithGoogle, error, isLoading, clearError } = useAuthStore();
 
     const [tab, setTab] = useState<AuthTab>("login");
     const [email, setEmail] = useState("");
@@ -33,6 +34,13 @@ export function AuthPage() {
             ok = await register(email, password, name);
         }
         if (ok) navigate("/");
+    };
+
+    const handleGoogleSuccess = async (response: any) => {
+        if (response.credential) {
+            const ok = await loginWithGoogle(response.credential);
+            if (ok) navigate("/");
+        }
     };
 
     return (
@@ -128,6 +136,20 @@ export function AuthPage() {
                                 : "Create Account"}
                     </button>
                 </form>
+
+                <div style={styles.divider}>
+                    <span style={styles.dividerText}>OR</span>
+                </div>
+
+                <div style={styles.googleBtnWrapper}>
+                    <GoogleLogin
+                        onSuccess={handleGoogleSuccess}
+                        onError={() => console.error("Google Login Failed")}
+                        theme="filled_black"
+                        shape="pill"
+                        text={tab === "login" ? "signin_with" : "signup_with"}
+                    />
+                </div>
 
                 <p style={styles.footer}>
                     {tab === "login" ? "Don't have an account? " : "Already have an account? "}
@@ -260,5 +282,24 @@ const styles: Record<string, React.CSSProperties> = {
         fontWeight: 600,
         cursor: "pointer",
         padding: 0,
+    },
+    divider: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        position: "relative",
+        margin: "8px 0",
+    },
+    dividerText: {
+        background: "var(--bg-primary)",
+        padding: "0 12px",
+        color: "var(--text-secondary)",
+        fontSize: "0.8rem",
+        fontWeight: 600,
+        zIndex: 1,
+    },
+    googleBtnWrapper: {
+        display: "flex",
+        justifyContent: "center",
     },
 };

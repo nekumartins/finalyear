@@ -25,6 +25,7 @@ interface AuthState {
     error: string | null;
 
     login: (email: string, password: string) => Promise<boolean>;
+    loginWithGoogle: (idToken: string) => Promise<boolean>;
     register: (email: string, password: string, name: string) => Promise<boolean>;
     logout: () => void;
     checkAuth: () => Promise<void>;
@@ -49,6 +50,33 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             const data = await res.json();
             if (!res.ok) {
                 set({ error: data.detail || "Login failed", isLoading: false });
+                return false;
+            }
+            localStorage.setItem("token", data.access_token);
+            set({
+                token: data.access_token,
+                user: data.user,
+                isAuthenticated: true,
+                isLoading: false,
+            });
+            return true;
+        } catch {
+            set({ error: "Network error", isLoading: false });
+            return false;
+        }
+    },
+
+    loginWithGoogle: async (idToken) => {
+        set({ error: null, isLoading: true });
+        try {
+            const res = await fetch(`${API}/google`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id_token: idToken }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                set({ error: data.detail || "Google login failed", isLoading: false });
                 return false;
             }
             localStorage.setItem("token", data.access_token);
