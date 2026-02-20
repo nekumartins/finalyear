@@ -60,16 +60,17 @@ export function useAudioCapture({
       streamRef.current = stream;
       setHasPermission(true);
 
-      // Create audio context — browser may give a different rate than requested
-      const ctx = new AudioContext({ sampleRate });
+      // Create audio context at hardware default rate.
+      // Firefox requires AudioContext to match hardware rate for MediaStreamSource.
+      // We resample to target rate (16kHz) in the onaudioprocess callback.
+      const ctx = new AudioContext();
       contextRef.current = ctx;
       const actualRate = ctx.sampleRate;
 
-      if (actualRate !== sampleRate) {
-        console.warn(
-          `[Audio] Requested ${sampleRate}Hz, got ${actualRate}Hz — will resample`
-        );
-      }
+      console.info(
+        `[Audio] Hardware rate: ${actualRate}Hz, target: ${sampleRate}Hz — ${actualRate !== sampleRate ? "will resample" : "no resample needed"
+        }`
+      );
 
       const source = ctx.createMediaStreamSource(stream);
 

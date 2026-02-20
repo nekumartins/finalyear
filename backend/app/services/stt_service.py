@@ -42,6 +42,10 @@ class STTService(ABC):
         """Force-transcribe any remaining buffered audio (e.g. on session end)."""
         ...
 
+    async def get_result(self) -> dict | None:
+        """Poll for completed transcription results (non-blocking). Override in async impls."""
+        return None
+
     @abstractmethod
     async def transcribe_batch(self, audio_bytes: bytes) -> str:
         """Transcribe a complete audio buffer. Used for post-session."""
@@ -99,29 +103,86 @@ class CloudSTTService(STTService):
         )
         self._buffer = bytearray()
         self._full_transcript = ""
+        # Non-blocking: results arrive here from background tasks
+        self.result_queue: asyncio.Queue[dict] = asyncio.Queue()
+        self._pending_tasks: list[asyncio.Task] = []
 
     async def transcribe_chunk(self, audio_bytes: bytes) -> dict | None:
+        """Buffer audio. When full, fire off API call in background (non-blocking)."""
         self._buffer.extend(audio_bytes)
 
         if len(self._buffer) < self.BUFFER_THRESHOLD:
             return None  # Still buffering
 
-        return await self._transcribe_buffer()
-
-    async def flush(self) -> dict | None:
-        """Transcribe whatever remains in the buffer."""
-        if len(self._buffer) < 1600:  # Less than 0.05s — skip noise
-            return None
-        return await self._transcribe_buffer()
-
-    async def _transcribe_buffer(self) -> dict | None:
+        # Buffer is full — snapshot it and fire background task
         pcm_bytes = bytes(self._buffer)
         self._buffer.clear()
+        task = asyncio.create_task(self._transcribe_and_enqueue(pcm_bytes))
+        self._pending_tasks.append(task)
+        # Clean up completed tasks
+        self._pending_tasks = [t for t in self._pending_tasks if not t.done()]
+        return None  # Never blocks — results come via get_result()
 
+    async def get_result(self) -> dict | None:
+        """Non-blocking poll for completed transcription results."""
+        try:
+            return self.result_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
+
+    async def _transcribe_and_enqueue(self, pcm_bytes: bytes) -> None:
+        """Background task: transcribe PCM buffer and put result in queue."""
+        result = await self._transcribe_pcm(pcm_bytes)
+        if result:
+            await self.result_queue.put(result)
+
+    async def flush(self) -> dict | None:
+        """Transcribe whatever remains in the buffer (blocking — only at session end)."""
+        if len(self._buffer) < 1600:  # Less than 0.05s — skip noise
+            # But still wait for pending background tasks
+            if self._pending_tasks:
+                await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+                self._pending_tasks.clear()
+            # Drain any remaining results
+            results = []
+            while not self.result_queue.empty():
+                try:
+                    r = self.result_queue.get_nowait()
+                    results.append(r["text"])
+                except asyncio.QueueEmpty:
+                    break
+            if results:
+                combined = " ".join(results)
+                return {"text": combined, "is_final": True}
+            return None
+
+        pcm_bytes = bytes(self._buffer)
+        self._buffer.clear()
+        # Wait for all pending background tasks first
+        if self._pending_tasks:
+            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+            self._pending_tasks.clear()
+        result = await self._transcribe_pcm(pcm_bytes)
+        # Also drain any queued results
+        all_texts = []
+        while not self.result_queue.empty():
+            try:
+                r = self.result_queue.get_nowait()
+                all_texts.append(r["text"])
+            except asyncio.QueueEmpty:
+                break
+        if result:
+            all_texts.append(result["text"])
+        if all_texts:
+            combined = " ".join(all_texts)
+            return {"text": combined, "is_final": True}
+        return result
+
+    async def _transcribe_pcm(self, pcm_bytes: bytes) -> dict | None:
+        """Core transcription: PCM → WAV → Whisper API → filtered text."""
         wav_bytes = _pcm16_to_wav(pcm_bytes)
 
         try:
-            # Send WAV to Whisper API
             audio_file = io.BytesIO(wav_bytes)
             audio_file.name = "audio.wav"
 
@@ -139,6 +200,25 @@ class CloudSTTService(STTService):
             logger.info(f"[STT] Groq API returned in {dur:.2f}s")
 
             text = response.strip() if isinstance(response, str) else response.text.strip()
+
+            # ── Whisper hallucination filter ──
+            HALLUCINATION_BLOCKLIST = {
+                "you", "yeah", "yes", "yes.", "no", "okay", "ok",
+                "thank you", "thank you.", "thanks", "thanks.",
+                "bye", "bye.", "goodbye", "goodbye.",
+                "hello", "hello.", "hi", "hi.",
+                "hmm", "hm", "um", "uh", "ah", "oh",
+                "my teeth", "one, two, three, go.",
+                "that is my life.", "it's time to present.",
+                "what's that?", "...", "…",
+                "so", "er", "right", "well",
+                "you know", "i mean",
+            }
+            text_lower = text.lower().strip(" .,!?")
+            if not text or len(text) < 3 or text_lower in HALLUCINATION_BLOCKLIST:
+                if text:
+                    logger.info(f"[STT] Filtered hallucination: '{text}'")
+                return None
 
             if text:
                 self._full_transcript += " " + text
@@ -190,6 +270,9 @@ class EdgeSTTService(STTService):
 
     async def transcribe_batch(self, audio_bytes: bytes) -> str:
         return "[edge STT batch — Phase 7]"
+
+    async def get_result(self) -> dict | None:
+        return None
 
 
 def get_stt_service(mode: str) -> STTService:

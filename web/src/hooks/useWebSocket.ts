@@ -73,8 +73,10 @@ export function useWebSocket() {
 
     const ws = new WebSocket(getWsUrl());
     wsRef.current = ws;
+    let wasOpened = false; // Track if this WS ever completed handshake
 
     ws.onopen = () => {
+      wasOpened = true;
       console.log("[WS] Connected");
       reconnectAttempts.current = 0;
       startHeartbeat();
@@ -90,6 +92,8 @@ export function useWebSocket() {
     };
 
     ws.onclose = () => {
+      // Suppress logs for StrictMode phantom connections (never fully opened)
+      if (!wasOpened) return;
       console.log("[WS] Disconnected");
       stopHeartbeat();
 
@@ -127,8 +131,10 @@ export function useWebSocket() {
       }
     };
 
-    ws.onerror = (err) => {
-      console.error("[WS] Error:", err);
+    ws.onerror = () => {
+      // Suppress error for StrictMode phantom connections
+      if (!wasOpened) return;
+      console.error("[WS] Connection error");
     };
   }, [startHeartbeat, stopHeartbeat]);
 

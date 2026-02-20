@@ -282,8 +282,12 @@ class DebateWebSocketHandler:
             signal = "ai_should_speak"
         elif prediction.is_speech:
             signal = "user_speaking"
-        else:
+        elif self.turn_taking_service._speech_frames > 0:
+            # User WAS speaking but went silent — they're wrapping up
             signal = "user_will_yield"
+        else:
+            # No speech detected yet — stay in idle/listening state
+            signal = "user_speaking"
 
         await self._send(TurnSignalMsg(
             session_id=self.session_id,
@@ -306,11 +310,14 @@ class DebateWebSocketHandler:
             self._speculative_buffer.clear()
             self._speculative_text = ""
 
-        # ── 2. Speech-to-Text (buffered) ──
-        stt_result = await self.stt_service.transcribe_chunk(audio_bytes)
-        t2 = time.time()
-        if (t2 - t1) > 0.1:
-            logger.warning(f"[Perf] STT took {t2-t1:.3f}s")
+        # ── 2. Speech-to-Text (non-blocking, VAD-gated) ──
+        # Only feed audio to STT when VAD detects speech.
+        # transcribe_chunk fires a background task and returns immediately.
+        if prediction.is_speech:
+            await self.stt_service.transcribe_chunk(audio_bytes)
+
+        # Poll for any completed STT results (from background tasks)
+        stt_result = await self.stt_service.get_result()
 
         if stt_result and stt_result.get("text"):
             self.latency.record("stt_result")
@@ -333,7 +340,10 @@ class DebateWebSocketHandler:
             self._start_speculative_llm()
 
         # ── 4. If turn-taking says user is done → trigger AI response ──
-        if prediction.should_ai_speak and self.current_user_text.strip() and not self._ai_responding:
+        # Require minimum 4 words to avoid triggering on noise/hallucinations
+        user_words = self.current_user_text.strip().split()
+        has_meaningful_speech = len(user_words) >= 4
+        if prediction.should_ai_speak and has_meaningful_speech and not self._ai_responding:
             # Save user turn to transcript
             now_ms = int((time.time() - self.session_start_time) * 1000)
             user_text = self.current_user_text.strip()
@@ -350,6 +360,13 @@ class DebateWebSocketHandler:
                 start_ms=max(0, now_ms - len(user_text) * 30),  # approximate
                 end_ms=now_ms,
             ))
+
+            # ── CRITICAL: Set flag BEFORE create_task to prevent race condition ──
+            # Without this, multiple audio chunks can trigger concurrent AI responses
+            # between create_task() and the task's first await, causing garbled output.
+            self._ai_responding = True
+            self.current_user_text = ""  # Reset so next chunks don't re-trigger
+            await self.turn_taking_service.reset()  # Reset speech/silence counters
 
             # Launch AI response as a cancellable task (Phase 4)
             self._ai_task = asyncio.create_task(self._generate_ai_response())

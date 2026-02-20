@@ -82,12 +82,12 @@ class HybridTurnTakingService(TurnTakingService):
     """
 
     # Energy thresholds (normalized RMS)
-    SPEECH_THRESHOLD = 0.015       # Above this = speech detected
+    SPEECH_THRESHOLD = 0.03        # Above this = speech detected (raised to reduce noise triggers)
     SILENCE_NOISE_FLOOR = 0.005    # Below this = definitely silence
 
     # Adaptive silence thresholds (number of chunks at 100ms each)
-    SHORT_UTTERANCE_SILENCE = 8    # 800ms for short utterances
-    LONG_UTTERANCE_SILENCE = 15    # 1.5s for longer arguments
+    SHORT_UTTERANCE_SILENCE = 12   # 1.2s for short utterances (raised from 800ms)
+    LONG_UTTERANCE_SILENCE = 20    # 2.0s for longer arguments (raised from 1.5s)
     SHORT_UTTERANCE_WORDS = 5      # Threshold for "short" utterance
 
     # Estimated words per ~2s of audio (assuming ~150 WPM)
@@ -168,7 +168,7 @@ class HybridTurnTakingService(TurnTakingService):
         )
 
         # Only trigger if combined score is high enough AND we've heard some speech
-        should_speak = combined.combined_eot > 0.8 and self._speech_frames > 2
+        should_speak = combined.combined_eot > 0.8 and self._speech_frames > 5
         combined.should_ai_speak = should_speak
 
         return combined
