@@ -17,6 +17,15 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_base_url: str = "https://api.groq.com/openai/v1"
 
+    # Deepgram API — free at console.deepgram.com ($200 credit)
+    deepgram_api_key: str = ""
+
+    # STT provider: "deepgram" (streaming), "groq" (batch), "faster-whisper" (local)
+    stt_provider: str = "deepgram"
+
+    # faster-whisper (local STT) model size: tiny, base, small, medium
+    faster_whisper_model: str = "base"
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
