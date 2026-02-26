@@ -478,6 +478,13 @@ class DebateWebSocketHandler:
         self.latency.record("llm_start")
         first_token_logged = False
 
+        # ── Push user message to history BEFORE the LLM call ──
+        # This ensures:
+        #   1. The history is correct regardless of success/failure/cancellation
+        #   2. No duplicate pushes needed in except blocks
+        #   3. No "dangling user message" if the LLM errors out — it's already there
+        self.conversation_history.append({"role": "user", "content": user_text})
+
         try:
             async for token in self.llm_service.generate_response_stream(
                 user_text=user_text,
@@ -504,9 +511,8 @@ class DebateWebSocketHandler:
                 is_final=True,
             ))
 
-            # Save AI turn
+            # Save AI turn to history and transcript
             ai_end_ms = int((time.time() - self.session_start_time) * 1000)
-            self.conversation_history.append({"role": "user", "content": user_text})
             if full_response.strip():
                 self.conversation_history.append({"role": "assistant", "content": full_response})
                 self.transcript.append(TranscriptEntry(
@@ -517,9 +523,8 @@ class DebateWebSocketHandler:
                 ))
 
         except asyncio.CancelledError:
-            # Barge-in cancellation — save partial response
+            # Barge-in cancellation — save partial response if any
             logger.info(f"[LLM] Response cancelled after {len(full_response)} chars")
-            self.conversation_history.append({"role": "user", "content": user_text})
             if full_response.strip():
                 ai_end_ms = int((time.time() - self.session_start_time) * 1000)
                 self.conversation_history.append({"role": "assistant", "content": full_response + " [interrupted]"})
@@ -530,10 +535,19 @@ class DebateWebSocketHandler:
                     end_ms=ai_end_ms,
                 ))
             raise  # Re-raise so the task is properly cancelled
+
         except Exception as e:
+            # LLM failed (rate limit exhausted, network error, etc.)
+            # Send a proper error message to the client, NOT error text as AI speech
             logger.error(f"[LLM] Response generation failed: {e}")
-            await self._send(ErrorMsg(code="llm_error", message=str(e)))
-            self.conversation_history.append({"role": "user", "content": user_text})
+            await self._send(ErrorMsg(code="llm_error", message="AI couldn't respond right now. Try again."))
+            # Send end-of-response marker so the frontend knows the AI turn is over
+            await self._send(AiResponseChunkMsg(
+                session_id=self.session_id,
+                text="",
+                is_final=True,
+            ))
+
         finally:
             # Reset for next user turn
             self.current_user_text = ""
