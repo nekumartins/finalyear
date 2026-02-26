@@ -1,5 +1,5 @@
 /**
- * DebatePage — Live debate session.
+ * DebatePage — Live debate session with premium header, waveform indicator, and glass layout.
  *
  * Flow:
  * 1. Connects WebSocket + starts audio capture on mount
@@ -7,7 +7,7 @@
  * 3. Receives turn signals, transcript updates, AI responses
  * 4. User clicks "End" → receives metrics → navigates to MetricsPage
  */
-import React, { useEffect, useCallback } from "react";
+import React, { useEffect, useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDebateStore } from "../stores/debateStore";
 import { useWebSocket } from "../hooks/useWebSocket";
@@ -15,10 +15,45 @@ import { useAudioCapture } from "../hooks/useAudioCapture";
 import { Transcript } from "../components/Transcript";
 import { TurnIndicator } from "../components/TurnIndicator";
 
+/** Animated waveform bars shown while recording */
+function WaveformBars() {
+  const bars = [0.4, 0.8, 0.5, 1.0, 0.6, 0.9, 0.45, 0.75, 0.55, 0.85];
+  return (
+    <div style={styles.waveform}>
+      {bars.map((h, i) => (
+        <div
+          key={i}
+          style={{
+            ...styles.waveBar,
+            animationDelay: `${i * 0.08}s`,
+            height: `${h * 28}px`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** Elapsed timer displayed in the header */
+function ElapsedTimer({ startTime }: { startTime: number }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const id = setInterval(
+      () => setElapsed(Math.floor((Date.now() - startTime) / 1000)),
+      1000
+    );
+    return () => clearInterval(id);
+  }, [startTime]);
+  const m = Math.floor(elapsed / 60).toString().padStart(2, "0");
+  const s = (elapsed % 60).toString().padStart(2, "0");
+  return <span style={styles.timerText}>{m}:{s}</span>;
+}
+
 export function DebatePage() {
   const navigate = useNavigate();
   const { topic, userPosition, mode, sessionId, status } = useDebateStore();
-  const { startSession, sendAudioChunk, endSession, disconnect } = useWebSocket();
+  const { startSession, sendAudioChunk, endSession } = useWebSocket();
+  const [sessionStart] = useState(Date.now());
 
   // Audio chunk callback — sends to backend via WebSocket
   const onAudioChunk = useCallback(
@@ -59,8 +94,6 @@ export function DebatePage() {
   const handleEnd = () => {
     stopAudio();
     if (sessionId) endSession(sessionId);
-    // metrics will arrive via WebSocket → store → triggers navigation
-    // fallback: navigate after timeout
     setTimeout(() => {
       if (useDebateStore.getState().status !== "ended") {
         navigate("/metrics");
@@ -70,36 +103,67 @@ export function DebatePage() {
 
   return (
     <div style={styles.page}>
-      {/* Header */}
-      <div style={styles.header}>
-        <div>
-          <h2 style={styles.topic}>{topic}</h2>
-          <span style={styles.badge}>
-            {mode === "cloud" ? "☁️ Cloud" : "📱 Edge"} · You argue{" "}
-            <strong>{userPosition}</strong>
-          </span>
+      {/* ── Header card ── */}
+      <div className="glass" style={styles.header}>
+        <div style={styles.headerLeft}>
+          <div style={styles.topicRow}>
+            <h2 style={styles.topic}>{topic}</h2>
+            <span
+              style={{
+                ...styles.stanceBadge,
+                background:
+                  userPosition === "for"
+                    ? "rgba(52,211,153,0.15)"
+                    : "rgba(248,113,113,0.15)",
+                border:
+                  userPosition === "for"
+                    ? "1px solid rgba(52,211,153,0.35)"
+                    : "1px solid rgba(248,113,113,0.35)",
+                color:
+                  userPosition === "for" ? "var(--success)" : "var(--danger)",
+              }}
+            >
+              {userPosition === "for" ? "👍" : "👎"} You argue{" "}
+              <strong>{userPosition}</strong>
+            </span>
+          </div>
+          <div style={styles.headerMeta}>
+            <span style={styles.modePill}>
+              {mode === "cloud" ? "☁️ Cloud" : "⚡ Edge"}
+            </span>
+            <span style={styles.timerWrap}>
+              <ElapsedTimer startTime={sessionStart} />
+            </span>
+          </div>
         </div>
-        <button className="btn-danger" onClick={handleEnd}>
-          ⏹️ End Debate
+
+        <button className="btn-danger" onClick={handleEnd} style={styles.endBtn}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
+            <rect x="4" y="4" width="16" height="16" rx="2" fill="currentColor" />
+          </svg>
+          End Debate
         </button>
       </div>
 
-      {/* Turn indicator */}
-      <TurnIndicator />
-
-      {/* Status */}
+      {/* ── Status / recording row ── */}
       {status === "connecting" && (
-        <div style={styles.connecting}>Connecting to debate server...</div>
-      )}
-
-      {/* Recording indicator */}
-      {isRecording && (
-        <div style={styles.recording}>
-          <span style={styles.redDot} /> Recording — speak your argument
+        <div style={styles.connectingBanner}>
+          <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2 }} />
+          Connecting to debate server…
         </div>
       )}
 
-      {/* Transcript */}
+      {isRecording && (
+        <div style={styles.recordingBanner}>
+          <WaveformBars />
+          <span style={styles.recordingText}>Recording — speak your argument</span>
+        </div>
+      )}
+
+      {/* ── Turn indicator ── */}
+      <TurnIndicator />
+
+      {/* ── Transcript (fills remaining height) ── */}
       <div style={styles.transcriptArea}>
         <Transcript />
       </div>
@@ -111,41 +175,123 @@ const styles: Record<string, React.CSSProperties> = {
   page: {
     display: "flex",
     flexDirection: "column",
-    gap: "16px",
+    gap: "14px",
     height: "calc(100vh - 130px)",
+    animation: "fadeSlideUp 0.35s ease",
   },
   header: {
     display: "flex",
     justifyContent: "space-between",
-    alignItems: "flex-start",
+    alignItems: "center",
+    padding: "16px 24px",
+    gap: "16px",
+    flexShrink: 0,
   },
-  topic: { fontSize: "1.4rem", marginBottom: "4px" },
-  badge: {
+  headerLeft: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
+    minWidth: 0,
+    flex: 1,
+  },
+  topicRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    flexWrap: "wrap",
+  },
+  topic: {
+    fontSize: "1.2rem",
+    fontWeight: 700,
+    letterSpacing: "-0.01em",
+    margin: 0,
+  },
+  stanceBadge: {
+    fontSize: "0.78rem",
+    fontWeight: 600,
+    padding: "4px 12px",
+    borderRadius: "20px",
+    flexShrink: 0,
+  },
+  headerMeta: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+  },
+  modePill: {
+    fontSize: "0.75rem",
+    color: "var(--text-muted)",
+    background: "var(--bg-glass)",
+    border: "1px solid var(--border)",
+    padding: "3px 10px",
+    borderRadius: "20px",
+  },
+  timerWrap: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+  },
+  timerText: {
+    fontFamily: "monospace",
     fontSize: "0.85rem",
     color: "var(--text-secondary)",
+    fontWeight: 600,
+    letterSpacing: "0.05em",
   },
-  connecting: {
-    textAlign: "center",
-    padding: "20px",
-    color: "var(--warning)",
-    fontSize: "1rem",
-  },
-  recording: {
+  endBtn: {
     display: "flex",
     alignItems: "center",
     gap: "8px",
-    color: "var(--danger)",
-    fontSize: "0.9rem",
+    flexShrink: 0,
+    padding: "10px 20px",
+    fontSize: "0.875rem",
   },
-  redDot: {
-    display: "inline-block",
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
+  connectingBanner: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    padding: "14px 20px",
+    borderRadius: "var(--radius)",
+    background: "rgba(251,191,36,0.08)",
+    border: "1px solid rgba(251,191,36,0.2)",
+    color: "var(--warning)",
+    fontSize: "0.9rem",
+    fontWeight: 500,
+    animation: "fadeSlideUp 0.3s ease",
+    flexShrink: 0,
+  },
+  recordingBanner: {
+    display: "flex",
+    alignItems: "center",
+    gap: "16px",
+    padding: "12px 20px",
+    borderRadius: "var(--radius)",
+    background: "rgba(248,113,113,0.08)",
+    border: "1px solid rgba(248,113,113,0.2)",
+    animation: "fadeSlideUp 0.3s ease",
+    flexShrink: 0,
+  },
+  waveform: {
+    display: "flex",
+    alignItems: "center",
+    gap: "3px",
+    height: "28px",
+  },
+  waveBar: {
+    width: "3px",
+    borderRadius: "2px",
     background: "var(--danger)",
+    animation: "waveBar 0.8s ease-in-out infinite",
+    transformOrigin: "bottom",
+  },
+  recordingText: {
+    fontSize: "0.875rem",
+    color: "var(--danger)",
+    fontWeight: 600,
   },
   transcriptArea: {
     flex: 1,
+    minHeight: 0,
     overflow: "hidden",
   },
 };
