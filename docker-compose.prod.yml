@@ -1,0 +1,54 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Debate Coach — Docker Compose (PRODUCTION)
+#
+# Starts two services:
+#   postgres  — Postgres 16, persistent volume
+#   backend   — FastAPI serving also the pre-built Vite bundle (single container)
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up --build -d
+#   make prod
+#
+# Access:
+#   App  →  http://localhost:8000
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: debate-coach-db
+    environment:
+      POSTGRES_USER: debate
+      POSTGRES_PASSWORD: debate_pass
+      POSTGRES_DB: debate_coach
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U debate -d debate_coach"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend + bundled Frontend (single container) ──────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: debate-coach-app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://debate:debate_pass@postgres:5432/debate_coach
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

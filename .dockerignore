@@ -23,9 +23,9 @@ web/dist
 .env
 .env.local
 
-# Docker
-docker-compose.yml
-Dockerfile
+# Docker compose / infra files (not needed inside containers)
+docker-compose.prod.yml
+Makefile
 
 # Models (large binary files)
 models/

@@ -1,8 +1,25 @@
-# Docker Compose — Debate Coach (Full Stack)
-# Usage: docker compose up --build -d
+# ─────────────────────────────────────────────────────────────────────────────
+# Debate Coach — Docker Compose (DEVELOPMENT)
+#
+# Starts three services:
+#   postgres  — Postgres 16, persistent volume
+#   backend   — FastAPI with --reload (live code via bind mount)
+#   web       — Vite dev server with hot-reload (live code via bind mount)
+#
+# Usage:
+#   docker compose up --build        # foreground, see all logs
+#   docker compose up --build -d     # detached (background)
+#   make dev                         # shorthand
+#
+# Access:
+#   Frontend  →  http://localhost:3000
+#   Backend   →  http://localhost:8000
+#   Postgres  →  localhost:5432
+# ─────────────────────────────────────────────────────────────────────────────
 
 services:
-  # ── PostgreSQL ──────────────────────────────
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: debate-coach-db
@@ -18,24 +35,56 @@ services:
       test: ["CMD-SHELL", "pg_isready -U debate -d debate_coach"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  # ── Backend + Frontend (single container) ───
+  # ── Backend (FastAPI, hot-reload) ──────────────────────────────────────────
   backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    container_name: debate-coach-app
+    image: python:3.12-slim
+    container_name: debate-coach-backend
+    working_dir: /app
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt -q &&
+             python -m uvicorn backend.app.main:app
+             --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "8000:8000"
+    volumes:
+      # Mount live source — changes reload instantly
+      - ./backend:/app/backend
+      - ./shared:/app/shared
+      - ./backend/requirements.txt:/app/requirements.txt
     env_file:
       - .env
     environment:
-      # Override DB host to point to Docker network
+      PYTHONPATH: /app
       DATABASE_URL: postgresql+asyncpg://debate:debate_pass@postgres:5432/debate_coach
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
+
+  # ── Frontend (Vite dev server, hot-reload) ─────────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile.dev
+    container_name: debate-coach-web
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount live source — saves to host, Vite picks up changes
+      - ./web/src:/app/src
+      - ./web/public:/app/public
+      - ./web/index.html:/app/index.html
+      - ./web/vite.config.ts:/app/vite.config.ts
+      - ./web/tsconfig.json:/app/tsconfig.json
+      # Keep node_modules from the container (do NOT mount host node_modules)
+      - /app/node_modules
+    environment:
+      # Proxy inside Docker points to the backend service name
+      VITE_BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:

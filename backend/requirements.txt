@@ -32,3 +32,7 @@ aiosqlite>=0.20.0
 # STT Providers
 deepgram-sdk>=3.0
 faster-whisper>=1.0.0
+
+# VAD (Silero — optional but recommended for better EoT accuracy)
+# CPU-only build: ~300MB. GPU build: pip install torch (no index-url)
+torch>=2.0.0 --index-url https://download.pytorch.org/whl/cpu
