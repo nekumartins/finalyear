@@ -25,6 +25,59 @@ async def health_check():
     return {"status": "ok", "service": "debate-coach-backend"}
 
 
+@router.get("/test-stt")
+async def test_stt():
+    """Test Deepgram STT with a silent audio clip — verifies API key and connectivity."""
+    import io, struct
+    from backend.app.config import get_settings
+    import httpx
+
+    settings = get_settings()
+    key = settings.deepgram_api_key
+    if not key:
+        return {"error": "No DEEPGRAM_API_KEY configured"}
+
+    # Build a 1-second silent WAV (16kHz, mono, PCM16)
+    sample_rate, channels, bits = 16000, 1, 16
+    num_samples = sample_rate  # 1 second
+    pcm = bytes(num_samples * 2)  # all zeros = silence
+    byte_rate = sample_rate * channels * bits // 8
+    block_align = channels * bits // 8
+    data_size = len(pcm)
+
+    buf = io.BytesIO()
+    buf.write(b"RIFF"); buf.write(struct.pack("<I", 36 + data_size))
+    buf.write(b"WAVE"); buf.write(b"fmt ")
+    buf.write(struct.pack("<I", 16)); buf.write(struct.pack("<H", 1))
+    buf.write(struct.pack("<H", channels)); buf.write(struct.pack("<I", sample_rate))
+    buf.write(struct.pack("<I", byte_rate)); buf.write(struct.pack("<H", block_align))
+    buf.write(struct.pack("<H", bits)); buf.write(b"data")
+    buf.write(struct.pack("<I", data_size)); buf.write(pcm)
+    wav_bytes = buf.getvalue()
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://api.deepgram.com/v1/listen",
+                params={"model": "nova-3", "language": "en"},
+                headers={"Authorization": f"Token {key}", "Content-Type": "audio/wav"},
+                content=wav_bytes,
+            )
+        return {
+            "status_code": resp.status_code,
+            "ok": resp.status_code == 200,
+            "transcript": (
+                resp.json()
+                .get("results", {})
+                .get("channels", [{}])[0]
+                .get("alternatives", [{}])[0]
+                .get("transcript", "(empty — silence expected)")
+            ) if resp.status_code == 200 else resp.text[:300],
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @router.get("/sessions")
 async def list_sessions(
     limit: int = 20,

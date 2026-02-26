@@ -108,14 +108,18 @@ export function useWebSocket() {
         console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectAttempts.current})`);
         reconnectTimer.current = setTimeout(() => {
           connect();
-          // Re-start session on reconnect if we had one
+          // Re-announce session on reconnect — use resume_session so the backend
+          // doesn't wipe session state (transcript, STT buffers, history).
           if (lastSessionRef.current) {
-            const { topic, userPosition, mode } = lastSessionRef.current;
+            const { sessionId, topic, userPosition, mode } = lastSessionRef.current;
             const checkAndResend = () => {
               if (wsRef.current?.readyState === WebSocket.OPEN) {
+                // If we have an existing session ID, try to resume it
+                const msgType = sessionId ? "resume_session" : "start_session";
                 wsRef.current.send(
                   JSON.stringify({
-                    type: "start_session",
+                    type: msgType,
+                    session_id: sessionId || undefined,
                     topic,
                     user_position: userPosition,
                     mode,
