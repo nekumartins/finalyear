@@ -17,9 +17,16 @@ import base64
 import json
 import logging
 import time
+from datetime import datetime, timezone
 
 from fastapi import WebSocket, WebSocketDisconnect
+from sqlalchemy import delete, select
 
+from backend.app.db.models import (
+    Session as DBSessionModel,
+    TranscriptEntry as DBTranscriptEntryModel,
+)
+from backend.app.db.session import async_session_factory
 from backend.app.schemas.messages import (
     AiResponseChunkMsg,
     AudioChunkMsg,
@@ -78,6 +85,10 @@ class DebateWebSocketHandler:
 
         # Barge-in: cancellable AI generation task (Phase 4)
         self._ai_task: asyncio.Task | None = None
+
+        # Placeholder speculative state (feature-gated, currently unused)
+        self._speculative_task: asyncio.Task | None = None
+        self._speculative_buffer: list[str] = []
 
         # Barge-in debounce state
         self._barge_in_speech_ms: float = 0.0
@@ -344,6 +355,8 @@ class DebateWebSocketHandler:
 
         # ── 1. Turn-taking analysis ──
         prediction = await self.turn_taking_service.analyze_chunk(audio_bytes, sample_rate=sample_rate)
+        if prediction.should_ai_speak:
+            self.latency.record("turn_detected")
         t1 = time.time()
         if (t1 - t0) > 0.1:
             logger.warning(f"[Perf] TurnJudging took {t1-t0:.3f}s")
@@ -594,6 +607,9 @@ class DebateWebSocketHandler:
         metrics["transcript"] = [e.model_dump() for e in self.transcript]
         metrics["latency_report"] = self.latency.get_report()
 
+        # Persist authenticated sessions for history view.
+        await self._persist_session(metrics, duration)
+
         await self._send(SessionMetricsMsg(
             session_id=self.session_id,
             **metrics,
@@ -614,6 +630,70 @@ class DebateWebSocketHandler:
             self._timeout_task = None
         logger.info(f"Session ended: {self.session_id} ({duration:.1f}s)")
         self.session_id = None
+
+    async def _persist_session(self, metrics: dict, duration: float) -> None:
+        """Best-effort persistence of authenticated session history."""
+        if not self.user_id or not self.session_id:
+            return
+
+        try:
+            async with async_session_factory() as db:
+                result = await db.execute(
+                    select(DBSessionModel).where(DBSessionModel.id == self.session_id)
+                )
+                db_session = result.scalar_one_or_none()
+
+                started_at = datetime.fromtimestamp(self.session_start_time, tz=timezone.utc)
+                ended_at = datetime.now(timezone.utc)
+
+                if db_session is None:
+                    db_session = DBSessionModel(
+                        id=self.session_id,
+                        user_id=self.user_id,
+                        mode=self.mode,
+                        topic=self.topic,
+                        user_position=self.user_position,
+                        started_at=started_at,
+                    )
+                    db.add(db_session)
+                else:
+                    db_session.user_id = self.user_id
+                    db_session.mode = self.mode
+                    db_session.topic = self.topic
+                    db_session.user_position = self.user_position
+                    if not db_session.started_at:
+                        db_session.started_at = started_at
+
+                db_session.ended_at = ended_at
+                db_session.duration_seconds = metrics.get("duration_seconds", duration)
+                db_session.user_wpm = metrics.get("user_wpm", 0)
+                db_session.ai_wpm = metrics.get("ai_wpm", 0)
+                db_session.filler_word_count = metrics.get("filler_word_count", 0)
+                db_session.filler_words_json = metrics.get("filler_words", {})
+                db_session.avg_pause_duration_ms = metrics.get("avg_pause_duration_ms", 0)
+                db_session.turn_count = metrics.get("turn_count", 0)
+                db_session.user_talk_ratio = metrics.get("user_talk_ratio", 0)
+
+                # Replace transcript rows on re-end to avoid duplicates.
+                await db.execute(
+                    delete(DBTranscriptEntryModel).where(
+                        DBTranscriptEntryModel.session_id == self.session_id
+                    )
+                )
+                for entry in self.transcript:
+                    db.add(DBTranscriptEntryModel(
+                        session_id=self.session_id,
+                        speaker=entry.speaker,
+                        text=entry.text,
+                        start_ms=entry.start_ms,
+                        end_ms=entry.end_ms,
+                    ))
+
+                await db.commit()
+        except Exception as e:
+            logger.exception(
+                f"[Session] Failed to persist session history (session={self.session_id}): {e}"
+            )
 
     async def _send(self, msg) -> None:
         """Send a Pydantic model as JSON over WebSocket."""

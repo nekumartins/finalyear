@@ -35,8 +35,16 @@ export function HistoryPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch("/api/sessions")
-      .then((r) => r.json())
+    const token = localStorage.getItem("token");
+    fetch("/api/sessions", {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((r) => {
+        if (!r.ok) {
+          throw new Error(`Failed to load sessions: ${r.status}`);
+        }
+        return r.json();
+      })
       .then((data) => {
         setSessions(data);
         setLoading(false);
