@@ -6,8 +6,8 @@ Orchestrates the real-time flow:
                                                → LLM → streamed response
 Features:
   - Async audio processing queue (decoupled from WS receive loop)
-  - Backpressure: drops oldest audio if queue overflows
-  - Barge-in: cancels AI response when user starts speaking
+  - Backpressure: bounded queue drops incoming audio when overloaded
+  - Barge-in debounce: requires sustained speech before interruption
   - Latency instrumentation at every pipeline stage
 
 Each connected client gets its own handler instance with isolated state.
@@ -23,11 +23,11 @@ from fastapi import WebSocket, WebSocketDisconnect
 from backend.app.schemas.messages import (
     AiResponseChunkMsg,
     AudioChunkMsg,
-    EndSessionMsg,
     ErrorMsg,
     PongMsg,
     SessionCreatedMsg,
     SessionMetricsMsg,
+    SessionMode,
     StartSessionMsg,
     TranscriptEntry,
     TranscriptUpdateMsg,
@@ -43,10 +43,11 @@ from backend.app.services.auth_service import verify_ws_token
 logger = logging.getLogger(__name__)
 
 # Queue limits
-AUDIO_QUEUE_MAX = 50  # ~5s of 100ms chunks — drop oldest beyond this
+AUDIO_QUEUE_MAX = 200  # ~20s of 100ms chunks
 
 # Stability (Phase 7)
 SESSION_TIMEOUT_S = 60  # End session after 60s of inactivity
+BARGE_IN_DEBOUNCE_MS = 500.0
 
 
 class DebateWebSocketHandler:
@@ -78,10 +79,8 @@ class DebateWebSocketHandler:
         # Barge-in: cancellable AI generation task (Phase 4)
         self._ai_task: asyncio.Task | None = None
 
-        # Speculative LLM execution (Phase 6)
-        self._speculative_task: asyncio.Task | None = None
-        self._speculative_buffer: list[str] = []
-        self._speculative_text: str = ""  # user text that triggered speculation
+        # Barge-in debounce state
+        self._barge_in_speech_ms: float = 0.0
 
         # Session timeout (Phase 7)
         self._last_activity: float = time.monotonic()
@@ -115,6 +114,22 @@ class DebateWebSocketHandler:
                     case "start_session":
                         self._last_activity = time.monotonic()
                         await self._handle_start_session(data)
+                    case "resume_session":
+                        # Reconnect after a drop — re-announce session_id without
+                        # wiping any state.  If no session exists yet, fall through
+                        # and start one fresh.
+                        self._last_activity = time.monotonic()
+                        if self.session_id:
+                            logger.info(f"[WS] Resumed existing session {self.session_id}")
+                            await self._send(SessionCreatedMsg(
+                                session_id=self.session_id,
+                                topic=self.topic,
+                                mode=SessionMode(self.mode),
+                            ))
+                        else:
+                            # New connection, no session yet — treat as a fresh start.
+                            # Override 'type' so StartSessionMsg Pydantic model accepts it.
+                            await self._handle_start_session({**data, "type": "start_session"})
                     case "audio_chunk":
                         self._last_activity = time.monotonic()
                         await self._handle_audio_chunk(data)
@@ -138,16 +153,43 @@ class DebateWebSocketHandler:
             except Exception:
                 pass
         finally:
-            # Clean up background tasks
-            await self._stop_processor()
-            if self._timeout_task and not self._timeout_task.done():
-                self._timeout_task.cancel()
-                try:
-                    await self._timeout_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+            await self._shutdown()
+
+    async def _shutdown(self) -> None:
+        """Best-effort teardown for disconnects and process reloads."""
+        await self._stop_processor()
+
+        if self._timeout_task and not self._timeout_task.done():
+            self._timeout_task.cancel()
+            try:
+                await self._timeout_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._timeout_task = None
+
+        if self.stt_service:
+            try:
+                await self.stt_service.close()
+            except Exception as e:
+                logger.warning(f"[Shutdown] STT close error: {e}")
+        self.stt_service = None
+        self.llm_service = None
+        self.turn_taking_service = None
 
     async def _handle_start_session(self, data: dict) -> None:
+        # ── Guard: prevent a second start_session from clobbering an active one ──
+        if self.session_id:
+            logger.warning(
+                f"[WS] Ignoring duplicate start_session — session {self.session_id} already active"
+            )
+            # Re-send session_created so the client knows it's already set up
+            await self._send(SessionCreatedMsg(
+                session_id=self.session_id,
+                topic=self.topic,
+                mode=SessionMode(self.mode),
+            ))
+            return
+
         msg = StartSessionMsg(**data)
         self.session_id = f"session-{int(time.time() * 1000)}"
         self.mode = msg.mode.value
@@ -158,6 +200,7 @@ class DebateWebSocketHandler:
         self.conversation_history = []
         self.current_user_text = ""
         self._ai_responding = False
+        self._barge_in_speech_ms = 0.0
 
         # Initialize services for this session's mode
         self.stt_service = get_stt_service(self.mode)
@@ -170,6 +213,12 @@ class DebateWebSocketHandler:
 
         # Start session timeout watchdog
         self._last_activity = time.monotonic()
+        if self._timeout_task and not self._timeout_task.done():
+            self._timeout_task.cancel()
+            try:
+                await self._timeout_task
+            except (asyncio.CancelledError, Exception):
+                pass
         self._timeout_task = asyncio.create_task(self._session_timeout_watchdog())
 
         await self._send(SessionCreatedMsg(
@@ -182,26 +231,26 @@ class DebateWebSocketHandler:
     async def _handle_audio_chunk(self, data: dict) -> None:
         """Enqueue audio chunk for async processing (non-blocking)."""
         if not self.session_id or not self._audio_queue:
+            logger.warning("[Audio] Received chunk but no active session/queue — dropping")
             await self._send(ErrorMsg(code="no_session", message="Start a session first"))
             return
 
         msg = AudioChunkMsg(**data)
         audio_bytes = base64.b64decode(msg.chunk_b64)
         client_ts = msg.timestamp_ms
-        logger.debug(f"[Audio] Received chunk: {len(audio_bytes)} bytes, queue size: {self._audio_queue.qsize()}")
+        sample_rate = msg.sample_rate if 8000 <= msg.sample_rate <= 48000 else 16000
+        logger.info(f"[Audio] Received chunk: {len(audio_bytes)} bytes, queue size: {self._audio_queue.qsize()}")
 
-        # Backpressure: if queue is full, drop oldest chunk
+        # Backpressure: if queue is full, drop incoming chunk (preserve
+        # continuity of already buffered audio instead of carving holes).
         if self._audio_queue.full():
-            try:
-                self._audio_queue.get_nowait()
-                logger.warning("[Backpressure] Dropped oldest audio chunk")
-            except asyncio.QueueEmpty:
-                pass
+            logger.warning("[Backpressure] Audio queue full, dropping incoming audio chunk")
+            return
 
         try:
-            self._audio_queue.put_nowait((audio_bytes, client_ts))
+            self._audio_queue.put_nowait((audio_bytes, client_ts, sample_rate))
         except asyncio.QueueFull:
-            logger.warning("[Backpressure] Audio queue full, dropping chunk")
+            logger.warning("[Backpressure] Audio queue race, dropping incoming audio chunk")
 
     # ── Session Timeout Watchdog (Phase 7) ─────────────────
 
@@ -210,14 +259,20 @@ class DebateWebSocketHandler:
         try:
             while True:
                 await asyncio.sleep(10)  # Check every 10s
+                if not self.session_id:
+                    break
                 idle = time.monotonic() - self._last_activity
                 if idle >= SESSION_TIMEOUT_S:
                     logger.info(f"[Timeout] Session {self.session_id} idle for {idle:.0f}s — ending")
                     await self._handle_end_session({"type": "end_session", "session_id": self.session_id})
-                    await self._send(ErrorMsg(
-                        code="session_timeout",
-                        message=f"Session timed out after {SESSION_TIMEOUT_S}s of inactivity"
-                    ))
+                    # Guard: WS may already be closing — swallow send errors
+                    try:
+                        await self._send(ErrorMsg(
+                            code="session_timeout",
+                            message=f"Session timed out after {SESSION_TIMEOUT_S}s of inactivity"
+                        ))
+                    except Exception:
+                        pass
                     break
         except asyncio.CancelledError:
             pass
@@ -250,34 +305,44 @@ class DebateWebSocketHandler:
                 pass
             self._processor_task = None
 
+        self._barge_in_speech_ms = 0.0
+        self._ai_responding = False
         self._audio_queue = None
 
     async def _audio_processor_loop(self) -> None:
         """Background task: processes queued audio chunks for STT + turn-taking."""
         logger.info(f"[Processor] Audio processor started for session {self.session_id}")
+        chunk_count = 0
         try:
             while True:
-                audio_bytes, client_ts = await self._audio_queue.get()
-                logger.debug(f"[Processor] Processing chunk: {len(audio_bytes)} bytes")
-                await self._process_audio(audio_bytes, client_ts)
+                audio_bytes, client_ts, sample_rate = await self._audio_queue.get()
+                chunk_count += 1
+                logger.info(f"[Processor] Chunk #{chunk_count}: {len(audio_bytes)} bytes received")
+                await self._process_audio(audio_bytes, client_ts, sample_rate)
         except asyncio.CancelledError:
-            logger.info("[Processor] Audio processor stopped")
+            logger.info(f"[Processor] Audio processor stopped after {chunk_count} chunks")
         except Exception as e:
             logger.exception(f"[Processor] Error: {e}")
 
-    async def _process_audio(self, audio_bytes: bytes, client_ts: int) -> None:
+    async def _process_audio(self, audio_bytes: bytes, client_ts: int, sample_rate: int) -> None:
         """Process a single audio chunk: VAD + STT + turn decision."""
-        
         t0 = time.time()
-        # ── Latency: record audio arrival ──
         self.latency.record("audio_received", client_ts_ms=client_ts)
+        if sample_rate < 8000 or sample_rate > 48000:
+            sample_rate = 16000
+        chunk_duration_ms = ((len(audio_bytes) // 2) / sample_rate) * 1000.0
 
         # ── 1. Turn-taking analysis ──
-        prediction = await self.turn_taking_service.analyze_chunk(audio_bytes)
+        prediction = await self.turn_taking_service.analyze_chunk(audio_bytes, sample_rate=sample_rate)
         t1 = time.time()
         if (t1 - t0) > 0.1:
             logger.warning(f"[Perf] TurnJudging took {t1-t0:.3f}s")
-        
+
+        logger.info(
+            f"[VAD] is_speech={prediction.is_speech} speech_frames={self.turn_taking_service._speech_frames} "
+            f"silence_frames={self.turn_taking_service._silence_frames} eot={prediction.eot_probability:.2f} "
+            f"should_ai_speak={prediction.should_ai_speak}"
+        )
         if prediction.should_ai_speak:
             signal = "ai_should_speak"
         elif prediction.is_speech:
@@ -295,20 +360,16 @@ class DebateWebSocketHandler:
             confidence=prediction.eot_probability,
         ))
 
-        # ── Barge-in: if user speaks during AI response, cancel AI ──
-        if prediction.is_speech and self._ai_responding:
-            await self._cancel_ai_response()
-
-        # ── Barge-in: also cancel speculative LLM if user resumes ──
-        if prediction.is_speech and self._speculative_task and not self._speculative_task.done():
-            self._speculative_task.cancel()
-            try:
-                await self._speculative_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._speculative_task = None
-            self._speculative_buffer.clear()
-            self._speculative_text = ""
+        # ── Barge-in debounce: require sustained speech before cancel ──
+        if self._ai_responding:
+            if prediction.is_speech:
+                self._barge_in_speech_ms += chunk_duration_ms
+                if self._barge_in_speech_ms >= BARGE_IN_DEBOUNCE_MS:
+                    await self._cancel_ai_response()
+            else:
+                self._barge_in_speech_ms = 0.0
+        else:
+            self._barge_in_speech_ms = 0.0
 
         # ── 2. Speech-to-Text (non-blocking, VAD-gated) ──
         # Only feed audio to STT when VAD detects speech.
@@ -332,17 +393,15 @@ class DebateWebSocketHandler:
                 speaker="user",
             ))
 
-        # ── 3. Speculative LLM: start early when user MIGHT be finishing ──
-        if (prediction.eot_probability > 0.5
-                and self.current_user_text.strip()
-                and not self._ai_responding
-                and not self._speculative_task):
-            self._start_speculative_llm()
-
-        # ── 4. If turn-taking says user is done → trigger AI response ──
-        # Require minimum 4 words to avoid triggering on noise/hallucinations
+        # ── 3. If turn-taking says user is done → trigger AI response ──
+        # Require minimum 2 words to avoid triggering on single-word noise/hallucinations
         user_words = self.current_user_text.strip().split()
-        has_meaningful_speech = len(user_words) >= 4
+        has_meaningful_speech = len(user_words) >= 2
+        logger.info(
+            f"[Pipeline] should_ai_speak={prediction.should_ai_speak} "
+            f"words={len(user_words)} text='{self.current_user_text.strip()[:60]}' "
+            f"ai_responding={self._ai_responding}"
+        )
         if prediction.should_ai_speak and has_meaningful_speech and not self._ai_responding:
             # Save user turn to transcript
             now_ms = int((time.time() - self.session_start_time) * 1000)
@@ -352,7 +411,6 @@ class DebateWebSocketHandler:
             flush_result = await self.stt_service.flush()
             if flush_result and flush_result.get("text"):
                 user_text += " " + flush_result["text"]
-                self.current_user_text = user_text
 
             self.transcript.append(TranscriptEntry(
                 speaker="user",
@@ -368,8 +426,9 @@ class DebateWebSocketHandler:
             self.current_user_text = ""  # Reset so next chunks don't re-trigger
             await self.turn_taking_service.reset()  # Reset speech/silence counters
 
-            # Launch AI response as a cancellable task (Phase 4)
-            self._ai_task = asyncio.create_task(self._generate_ai_response())
+            # Launch AI response as a cancellable task — pass user_text directly
+            # because current_user_text has already been cleared above.
+            self._ai_task = asyncio.create_task(self._generate_ai_response(user_text))
 
     # ── Barge-in (Phase 4) ───────────────────────────────
 
@@ -385,6 +444,7 @@ class DebateWebSocketHandler:
 
         self._ai_responding = False
         self.current_user_text = ""
+        self._barge_in_speech_ms = 0.0
 
         # Signal client that AI response was interrupted
         await self._send(AiResponseChunkMsg(
@@ -394,75 +454,19 @@ class DebateWebSocketHandler:
         ))
         logger.info("[Barge-in] AI response cancelled — user resumed speaking")
 
-    # ── Speculative LLM Execution (Phase 6) ──────────────
-
-    def _start_speculative_llm(self) -> None:
-        """Start generating LLM response speculatively (buffered, not sent)."""
-        if self._speculative_task and not self._speculative_task.done():
-            return  # Already speculating
-
-        text = self.current_user_text.strip()
-        self._speculative_text = text
-        self._speculative_buffer.clear()
-        self._speculative_task = asyncio.create_task(self._speculative_generate(text))
-        logger.info(f"[Speculative] Starting pre-generation for: {text[:50]}...")
-
-    async def _speculative_generate(self, user_text: str) -> None:
-        """Silently buffer LLM tokens without sending to client."""
-        try:
-            async for token in self.llm_service.generate_response_stream(
-                user_text=user_text,
-                topic=self.topic,
-                user_position=self.user_position,
-                conversation_history=self.conversation_history,
-            ):
-                self._speculative_buffer.append(token)
-        except asyncio.CancelledError:
-            logger.info("[Speculative] Pre-generation cancelled")
-        except Exception as e:
-            logger.warning(f"[Speculative] Pre-generation error: {e}")
-
-    async def _generate_ai_response(self) -> None:
+    async def _generate_ai_response(self, user_text: str) -> None:
         """Stream an AI counter-argument back to the client."""
-        user_text = self.current_user_text.strip()
+        # user_text is passed in directly because current_user_text is reset before
+        # this task starts; reading it here would always yield an empty string.
         if not user_text:
             return
 
         self._ai_responding = True
 
-        # Add user turn to conversation history
-        self.conversation_history.append({"role": "user", "content": user_text})
-
         full_response = ""
         ai_start_ms = int((time.time() - self.session_start_time) * 1000)
         self.latency.record("llm_start")
         first_token_logged = False
-
-        # ── Phase 6: Flush speculative buffer if text matches ──
-        if self._speculative_buffer and self._speculative_text == user_text:
-            # Speculative generation matched — flush buffered tokens instantly
-            for token in self._speculative_buffer:
-                if not first_token_logged:
-                    self.latency.record("llm_first_token")
-                    first_token_logged = True
-                full_response += token
-                await self._send(AiResponseChunkMsg(
-                    session_id=self.session_id,
-                    text=token,
-                    is_final=False,
-                ))
-            logger.info(f"[Speculative] Flushed {len(self._speculative_buffer)} pre-generated tokens")
-
-        # Cancel any running speculative task
-        if self._speculative_task and not self._speculative_task.done():
-            self._speculative_task.cancel()
-            try:
-                await self._speculative_task
-            except (asyncio.CancelledError, Exception):
-                pass
-        self._speculative_task = None
-        self._speculative_buffer.clear()
-        self._speculative_text = ""
 
         try:
             async for token in self.llm_service.generate_response_stream(
@@ -492,6 +496,7 @@ class DebateWebSocketHandler:
 
             # Save AI turn
             ai_end_ms = int((time.time() - self.session_start_time) * 1000)
+            self.conversation_history.append({"role": "user", "content": user_text})
             if full_response.strip():
                 self.conversation_history.append({"role": "assistant", "content": full_response})
                 self.transcript.append(TranscriptEntry(
@@ -504,6 +509,7 @@ class DebateWebSocketHandler:
         except asyncio.CancelledError:
             # Barge-in cancellation — save partial response
             logger.info(f"[LLM] Response cancelled after {len(full_response)} chars")
+            self.conversation_history.append({"role": "user", "content": user_text})
             if full_response.strip():
                 ai_end_ms = int((time.time() - self.session_start_time) * 1000)
                 self.conversation_history.append({"role": "assistant", "content": full_response + " [interrupted]"})
@@ -517,14 +523,26 @@ class DebateWebSocketHandler:
         except Exception as e:
             logger.error(f"[LLM] Response generation failed: {e}")
             await self._send(ErrorMsg(code="llm_error", message=str(e)))
+            self.conversation_history.append({"role": "user", "content": user_text})
         finally:
             # Reset for next user turn
             self.current_user_text = ""
             self._ai_responding = False
+            self._barge_in_speech_ms = 0.0
 
     async def _handle_end_session(self, data: dict) -> None:
         if not self.session_id:
             return
+
+        # Stop timeout watchdog unless this call is running on that task.
+        current_task = asyncio.current_task()
+        if self._timeout_task and self._timeout_task is not current_task and not self._timeout_task.done():
+            self._timeout_task.cancel()
+            try:
+                await self._timeout_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._timeout_task = None
 
         # Stop audio processing
         await self._stop_processor()
@@ -560,6 +578,16 @@ class DebateWebSocketHandler:
         # Reset
         if self.turn_taking_service:
             await self.turn_taking_service.reset()
+        if self.stt_service:
+            try:
+                await self.stt_service.close()
+            except Exception as e:
+                logger.warning(f"[Session] STT close error: {e}")
+        self.stt_service = None
+        self.llm_service = None
+        self.turn_taking_service = None
+        if self._timeout_task is current_task:
+            self._timeout_task = None
         logger.info(f"Session ended: {self.session_id} ({duration:.1f}s)")
         self.session_id = None
 

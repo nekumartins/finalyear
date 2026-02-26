@@ -81,22 +81,27 @@ class HybridTurnTakingService(TurnTakingService):
     Falls back gracefully to energy-only if Silero is not installed.
     """
 
-    # Energy thresholds (normalized RMS)
-    SPEECH_THRESHOLD = 0.03        # Above this = speech detected (raised to reduce noise triggers)
-    SILENCE_NOISE_FLOOR = 0.005    # Below this = definitely silence
+    # Energy thresholds (normalized RMS) with hysteresis to reduce flicker.
+    SPEECH_START_THRESHOLD = 0.012
+    SPEECH_STOP_THRESHOLD = 0.007
+    SILERO_SPEECH_THRESHOLD = 0.5
 
-    # Adaptive silence thresholds (number of chunks at 100ms each)
-    SHORT_UTTERANCE_SILENCE = 12   # 1.2s for short utterances (raised from 800ms)
-    LONG_UTTERANCE_SILENCE = 20    # 2.0s for longer arguments (raised from 1.5s)
+    # Adaptive silence thresholds in milliseconds (time-based, not frame-based).
+    SHORT_UTTERANCE_SILENCE_MS = 800
+    LONG_UTTERANCE_SILENCE_MS = 1500
     SHORT_UTTERANCE_WORDS = 5      # Threshold for "short" utterance
 
-    # Estimated words per ~2s of audio (assuming ~150 WPM)
-    WORDS_PER_CHUNK = 0.25  # rough estimate: 150 WPM / 60 / 10 chunks per second
+    # ~150 WPM -> 2.5 words/second
+    WORDS_PER_SECOND = 2.5
+    MIN_SPEECH_MS = 300.0
 
     def __init__(self):
         self._silence_frames: int = 0
         self._speech_frames: int = 0
-        self._estimated_words: int = 0
+        self._silence_ms: float = 0.0
+        self._speech_ms: float = 0.0
+        self._estimated_words: float = 0.0
+        self._energy_speech_active: bool = False
         self._silero_vad = None
         self._has_silero: bool = False
 
@@ -117,16 +122,30 @@ class HybridTurnTakingService(TurnTakingService):
             logger.info(f"[TurnTaking] Silero VAD not available, using energy-only: {e}")
 
     @property
-    def _silence_threshold(self) -> int:
+    def _silence_threshold_ms(self) -> int:
         """Adaptive threshold: shorter silence for short utterances."""
         if self._estimated_words < self.SHORT_UTTERANCE_WORDS:
-            return self.SHORT_UTTERANCE_SILENCE
-        return self.LONG_UTTERANCE_SILENCE
+            return self.SHORT_UTTERANCE_SILENCE_MS
+        return self.LONG_UTTERANCE_SILENCE_MS
+
+    @property
+    def _silence_threshold(self) -> int:
+        """Compatibility alias retained for existing logs/tests."""
+        return self._silence_threshold_ms
 
     async def analyze_chunk(self, audio_bytes: bytes, sample_rate: int = 16000) -> TurnPrediction:
+        if sample_rate < 8000 or sample_rate > 48000:
+            sample_rate = 16000
+
+        num_samples = len(audio_bytes) // 2
+        chunk_duration_ms = (num_samples / sample_rate) * 1000.0 if num_samples else 0.0
+
         # ── 1. Heuristic: PCM16 RMS energy ──
         energy = _rms_energy_pcm16(audio_bytes)
-        is_speech_energy = energy > self.SPEECH_THRESHOLD
+        if self._energy_speech_active:
+            is_speech_energy = energy > self.SPEECH_STOP_THRESHOLD
+        else:
+            is_speech_energy = energy > self.SPEECH_START_THRESHOLD
 
         # ── 2. Predictive: Silero VAD (if available) ──
         silero_prob = 0.0
@@ -141,34 +160,43 @@ class HybridTurnTakingService(TurnTakingService):
                 silero_prob = float(self._silero_vad(tensor, sample_rate))
                 t_vad_dur = time.time() - t_vad_start
                 if t_vad_dur > 0.05:
-                     logger.warning(f"[Perf] Silero VAD took {t_vad_dur:.3f}s")
+                    logger.warning(f"[Perf] Silero VAD took {t_vad_dur:.3f}s")
             except Exception:
                 silero_prob = 0.0
 
         # ── 3. Combined speech detection ──
-        is_speech = is_speech_energy or silero_prob > 0.5
+        is_speech = is_speech_energy or silero_prob > self.SILERO_SPEECH_THRESHOLD
+        self._energy_speech_active = is_speech
 
         # ── 4. Update state ──
         if is_speech:
             self._speech_frames += 1
+            self._speech_ms += chunk_duration_ms
             self._silence_frames = 0
-            self._estimated_words += self.WORDS_PER_CHUNK
+            self._silence_ms = 0.0
+            self._estimated_words += self.WORDS_PER_SECOND * (chunk_duration_ms / 1000.0)
         else:
             self._silence_frames += 1
+            self._silence_ms += chunk_duration_ms
 
         # ── 5. Heuristic EoT: silence duration relative to adaptive threshold ──
-        eot_prob = min(self._silence_frames / max(self._silence_threshold, 1), 1.0)
+        eot_prob = min(self._silence_ms / max(self._silence_threshold_ms, 1), 1.0)
+
+        predictive_eot = 0.0
+        # Silero outputs P(speech). For EoT, invert to P(non-speech).
+        if not is_speech and self._has_silero:
+            predictive_eot = max(0.0, min(1.0, 1.0 - silero_prob))
 
         # ── 6. Combined decision ──
         combined = TurnPrediction(
             is_speech=is_speech,
             eot_probability=eot_prob,
-            predictive_eot=silero_prob if not is_speech else 0.0,
+            predictive_eot=predictive_eot,
             should_ai_speak=False,
         )
 
-        # Only trigger if combined score is high enough AND we've heard some speech
-        should_speak = combined.combined_eot > 0.8 and self._speech_frames > 5
+        # Trigger only when silence confidence is high and enough prior speech exists.
+        should_speak = combined.combined_eot > 0.8 and self._speech_ms >= self.MIN_SPEECH_MS
         combined.should_ai_speak = should_speak
 
         return combined
@@ -176,7 +204,10 @@ class HybridTurnTakingService(TurnTakingService):
     async def reset(self) -> None:
         self._silence_frames = 0
         self._speech_frames = 0
-        self._estimated_words = 0
+        self._silence_ms = 0.0
+        self._speech_ms = 0.0
+        self._estimated_words = 0.0
+        self._energy_speech_active = False
         # Reset Silero VAD state if available
         if self._has_silero and self._silero_vad is not None:
             try:

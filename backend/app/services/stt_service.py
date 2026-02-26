@@ -14,6 +14,7 @@ import io
 import logging
 import struct
 import asyncio
+import inspect
 import time
 from abc import ABC, abstractmethod
 
@@ -76,6 +77,40 @@ def _pcm16_to_wav(pcm_bytes: bytes, sample_rate: int = 16000, channels: int = 1)
     return buf.getvalue()
 
 
+async def _cancel_pending_tasks(tasks: list[asyncio.Task], timeout_s: float = 2.0) -> None:
+    """Best-effort cancellation for in-flight transcription tasks."""
+    if not tasks:
+        return
+
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+
+    try:
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        logger.warning(f"[STT] Timed out waiting for {len(tasks)} task(s) to cancel")
+    finally:
+        tasks.clear()
+
+
+def _drain_result_queue(result_queue: asyncio.Queue[dict]) -> None:
+    while not result_queue.empty():
+        try:
+            result_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+
+
+async def _close_client_if_supported(client: object) -> None:
+    close_fn = getattr(client, "close", None)
+    if not close_fn:
+        return
+    maybe_awaitable = close_fn()
+    if inspect.isawaitable(maybe_awaitable):
+        await maybe_awaitable
+
+
 # ═══════════════════════════════════════════════════════════
 # Abstract base
 # ═══════════════════════════════════════════════════════════
@@ -102,6 +137,10 @@ class STTService(ABC):
         """Transcribe a complete audio buffer. Used for post-session."""
         ...
 
+    async def close(self) -> None:
+        """Release provider resources and cancel in-flight work."""
+        return
+
 
 # ═══════════════════════════════════════════════════════════
 # Deepgram REST API (Nova-3)
@@ -114,26 +153,29 @@ class DeepgramSTTService(STTService):
     Much faster than Groq (typically <1s response time).
     """
 
-    BUFFER_THRESHOLD = 64_000  # ~2 seconds of 16kHz mono PCM16
+    BUFFER_THRESHOLD = 16_000  # ~500ms of 16kHz mono PCM16 (was 64KB/2s — too slow for live feedback)
 
     def __init__(self):
         settings = get_settings()
         self.api_key = settings.deepgram_api_key
-        self.client = httpx.AsyncClient(timeout=10.0)  # 10s timeout (vs Groq's 24s spikes)
+        self.client = httpx.AsyncClient(timeout=10.0)
         self._buffer = bytearray()
         self._full_transcript = ""
         self.result_queue: asyncio.Queue[dict] = asyncio.Queue()
         self._pending_tasks: list[asyncio.Task] = []
+        logger.info(f"[STT/Deepgram] Initialized (api_key={'SET' if self.api_key else 'MISSING'})")
 
     async def transcribe_chunk(self, audio_bytes: bytes) -> dict | None:
         """Buffer audio. When full, fire non-blocking API call."""
         self._buffer.extend(audio_bytes)
+        logger.debug(f"[STT/Deepgram] Buffer: {len(self._buffer)}/{self.BUFFER_THRESHOLD} bytes")
 
         if len(self._buffer) < self.BUFFER_THRESHOLD:
             return None
 
         pcm_bytes = bytes(self._buffer)
         self._buffer.clear()
+        logger.info(f"[STT/Deepgram] Buffer full — firing transcription task ({len(pcm_bytes)} bytes)")
         task = asyncio.create_task(self._transcribe_and_enqueue(pcm_bytes))
         self._pending_tasks.append(task)
         self._pending_tasks = [t for t in self._pending_tasks if not t.done()]
@@ -260,6 +302,15 @@ class DeepgramSTTService(STTService):
 
     def get_full_transcript(self) -> str:
         return self._full_transcript.strip()
+
+    async def close(self) -> None:
+        await _cancel_pending_tasks(self._pending_tasks)
+        self._buffer.clear()
+        _drain_result_queue(self.result_queue)
+        try:
+            await self.client.aclose()
+        except Exception as e:
+            logger.warning(f"[STT/Deepgram] Client close error: {e}")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -392,6 +443,15 @@ class GroqSTTService(STTService):
 
     def get_full_transcript(self) -> str:
         return self._full_transcript.strip()
+
+    async def close(self) -> None:
+        await _cancel_pending_tasks(self._pending_tasks)
+        self._buffer.clear()
+        _drain_result_queue(self.result_queue)
+        try:
+            await _close_client_if_supported(self.client)
+        except Exception as e:
+            logger.warning(f"[STT/Groq] Client close error: {e}")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -537,6 +597,11 @@ class LocalSTTService(STTService):
 
     def get_full_transcript(self) -> str:
         return self._full_transcript.strip()
+
+    async def close(self) -> None:
+        await _cancel_pending_tasks(self._pending_tasks)
+        self._buffer.clear()
+        _drain_result_queue(self.result_queue)
 
 
 # ═══════════════════════════════════════════════════════════

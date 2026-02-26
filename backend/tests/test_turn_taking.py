@@ -89,21 +89,52 @@ class TestHybridTurnTaking:
 
     @pytest.mark.asyncio
     async def test_adaptive_short_utterance_threshold(self, service, loud_audio, silence_audio):
-        """Short utterances (<5 words estimated) use 800ms (8 chunk) threshold."""
+        """Short utterances (<5 words estimated) use 800ms silence threshold."""
         # Simulate 2 speech chunks (< 5 estimated words)
         await service.analyze_chunk(loud_audio)
         await service.analyze_chunk(loud_audio)
         assert service._estimated_words < 5
-        assert service._silence_threshold == 8
+        assert service._silence_threshold == 800
 
     @pytest.mark.asyncio
     async def test_adaptive_long_utterance_threshold(self, service, loud_audio):
-        """Long utterances (≥5 words estimated) use 1.5s (15 chunk) threshold."""
+        """Long utterances (≥5 words estimated) use 1.5s silence threshold."""
         # Simulate many speech chunks to accumulate words
         for _ in range(25):
             await service.analyze_chunk(loud_audio)
         assert service._estimated_words >= 5
-        assert service._silence_threshold == 15
+        assert service._silence_threshold == 1500
+
+    @pytest.mark.asyncio
+    async def test_eot_is_time_based_not_frame_based(self, service, loud_audio):
+        """Larger chunks should reach EoT in fewer frames when elapsed silence is the same."""
+        # Seed prior speech so turn detection is allowed.
+        for _ in range(5):
+            await service.analyze_chunk(loud_audio)
+
+        # 200ms silence chunk (3200 samples @16kHz) should hit ~800ms in 4 frames.
+        silence_200ms = b"\x00\x00" * 3200
+        prediction = None
+        for _ in range(4):
+            prediction = await service.analyze_chunk(silence_200ms)
+
+        assert prediction is not None
+        assert prediction.eot_probability >= 0.99
+
+    @pytest.mark.asyncio
+    async def test_sample_rate_changes_elapsed_silence(self, service, loud_audio, silence_audio):
+        """Same bytes at lower sample rate represent longer time and higher EoT probability."""
+        for _ in range(5):
+            await service.analyze_chunk(loud_audio, sample_rate=16000)
+
+        p_16k = await service.analyze_chunk(silence_audio, sample_rate=16000)  # ~100ms
+
+        await service.reset()
+        for _ in range(5):
+            await service.analyze_chunk(loud_audio, sample_rate=16000)
+        p_8k = await service.analyze_chunk(silence_audio, sample_rate=8000)  # same bytes ~=200ms
+
+        assert p_8k.eot_probability > p_16k.eot_probability
 
     @pytest.mark.asyncio
     async def test_should_ai_speak_after_enough_silence(self, service, loud_audio, silence_audio):
