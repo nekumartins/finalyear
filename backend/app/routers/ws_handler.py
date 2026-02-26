@@ -159,6 +159,16 @@ class DebateWebSocketHandler:
         """Best-effort teardown for disconnects and process reloads."""
         await self._stop_processor()
 
+        # Cancel speculative LLM task (was previously missed)
+        if self._speculative_task and not self._speculative_task.done():
+            self._speculative_task.cancel()
+            try:
+                await self._speculative_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._speculative_task = None
+        self._speculative_buffer.clear()
+
         if self._timeout_task and not self._timeout_task.done():
             self._timeout_task.cancel()
             try:

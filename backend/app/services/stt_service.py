@@ -2,19 +2,20 @@
 Service: STT (Speech-to-Text) — Multi-provider
 
 Providers:
-  - Deepgram: REST API (Nova-3), low-latency, $200 free credit
+  - Deepgram: WebSocket streaming (Nova-3), 1 connection per session
   - Groq: OpenAI-compatible Whisper API (batch), free tier
   - faster-whisper: Local CPU inference, no API needed
 
-Design: All providers share the same interface (STTService ABC).
-Audio is buffered locally (~2s of 16kHz PCM16) then sent for transcription.
-Results are delivered via an async queue (non-blocking).
+Design: All providers share the STTService ABC.
+Batch providers (Groq, Local) extend BatchSTTService which handles
+buffering, background tasks, sequenced result queuing, and flush.
+Deepgram uses a persistent WebSocket — no buffering needed.
 """
 import io
+import json
 import logging
 import struct
 import asyncio
-import inspect
 import time
 from abc import ABC, abstractmethod
 
@@ -24,33 +25,44 @@ from backend.app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# ── Shared hallucination filter ──
+
+# ── Hallucination filter ──────────────────────────────────────
+#
+# Only block phrases that are known Whisper phantom outputs on silence.
+# Real debate words (yes, no, okay, so, right, well) are NOT blocked.
+
 HALLUCINATION_BLOCKLIST = {
-    "you", "yeah", "yes", "yes.", "no", "okay", "ok",
-    "thank you", "thank you.", "thanks", "thanks.",
-    "bye", "bye.", "goodbye", "goodbye.",
-    "hello", "hello.", "hi", "hi.",
-    "hmm", "hm", "um", "uh", "ah", "oh",
-    "my teeth", "one, two, three, go.",
-    "that is my life.", "it's time to present.",
-    "what's that?", "...", "…",
-    "so", "er", "right", "well",
-    "you know", "i mean",
+    # Whisper-specific phantom phrases (appear on silence)
+    # Stored in normalized form (lowercased, no trailing punctuation)
+    "my teeth",
+    "one, two, three, go",
+    "that is my life",
+    "it's time to present",
+    "what's that",
+    "...",
+    "…",
+    # Pure filler sounds (not words)
+    "hmm", "hm", "um", "uh", "ah", "oh", "er",
 }
 
 
 def _filter_hallucination(text: str) -> str | None:
-    """Return None if text is a known Whisper/STT hallucination, else return cleaned text."""
-    if not text or len(text) < 3:
+    """Return None if text is a known STT hallucination, else return cleaned text."""
+    if not text or len(text.strip()) < 2:
         return None
-    text_lower = text.lower().strip(" .,!?")
-    if text_lower in HALLUCINATION_BLOCKLIST:
+    cleaned = text.strip()
+    normalized = cleaned.lower().strip(" .,!?…")
+    # Block if normalized text is empty (pure punctuation like "...")
+    if not normalized:
+        return None
+    if normalized in HALLUCINATION_BLOCKLIST:
         logger.info(f"[STT] Filtered hallucination: '{text}'")
         return None
-    return text.strip()
+    return cleaned
 
 
-# ── WAV conversion helper ──
+
+# ── WAV conversion helper ─────────────────────────────────────
 
 def _pcm16_to_wav(pcm_bytes: bytes, sample_rate: int = 16000, channels: int = 1) -> bytes:
     """Convert raw PCM16 bytes to a WAV file in memory."""
@@ -77,50 +89,16 @@ def _pcm16_to_wav(pcm_bytes: bytes, sample_rate: int = 16000, channels: int = 1)
     return buf.getvalue()
 
 
-async def _cancel_pending_tasks(tasks: list[asyncio.Task], timeout_s: float = 2.0) -> None:
-    """Best-effort cancellation for in-flight transcription tasks."""
-    if not tasks:
-        return
-
-    for task in tasks:
-        if not task.done():
-            task.cancel()
-
-    try:
-        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout_s)
-    except asyncio.TimeoutError:
-        logger.warning(f"[STT] Timed out waiting for {len(tasks)} task(s) to cancel")
-    finally:
-        tasks.clear()
-
-
-def _drain_result_queue(result_queue: asyncio.Queue[dict]) -> None:
-    while not result_queue.empty():
-        try:
-            result_queue.get_nowait()
-        except asyncio.QueueEmpty:
-            break
-
-
-async def _close_client_if_supported(client: object) -> None:
-    close_fn = getattr(client, "close", None)
-    if not close_fn:
-        return
-    maybe_awaitable = close_fn()
-    if inspect.isawaitable(maybe_awaitable):
-        await maybe_awaitable
-
-
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 # Abstract base
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 
 class STTService(ABC):
     """Abstract STT interface — all implementations must follow this."""
 
     @abstractmethod
     async def transcribe_chunk(self, audio_bytes: bytes) -> dict | None:
-        """Feed a single audio chunk. Returns None (results come via get_result)."""
+        """Feed a single audio chunk. Results come via get_result()."""
         ...
 
     @abstractmethod
@@ -141,145 +119,306 @@ class STTService(ABC):
         """Release provider resources and cancel in-flight work."""
         return
 
+    def get_full_transcript(self) -> str:
+        """Return the accumulated full transcript."""
+        return ""
 
-# ═══════════════════════════════════════════════════════════
-# Deepgram REST API (Nova-3)
-# ═══════════════════════════════════════════════════════════
 
-class DeepgramSTTService(STTService):
+# ═══════════════════════════════════════════════════════════════
+# BatchSTTService — shared logic for buffer-and-send providers
+# ═══════════════════════════════════════════════════════════════
+
+class BatchSTTService(STTService):
     """
-    Deepgram Nova-3 via REST API.
-    Buffers ~2s of audio, sends as WAV to Deepgram's pre-recorded endpoint.
-    Much faster than Groq (typically <1s response time).
+    Base class for STT providers that buffer audio and send in batches.
+    Handles: buffering, background task management, sequenced result
+    queuing (prevents out-of-order results), and flush logic.
+
+    Subclasses only need to implement _transcribe_pcm() and transcribe_batch().
     """
 
-    BUFFER_THRESHOLD = 16_000  # ~500ms of 16kHz mono PCM16 (was 64KB/2s — too slow for live feedback)
+    BUFFER_THRESHOLD: int = 32_000  # 1 second of 16kHz PCM16 (default)
 
     def __init__(self):
-        settings = get_settings()
-        self.api_key = settings.deepgram_api_key
-        self.client = httpx.AsyncClient(timeout=10.0)
         self._buffer = bytearray()
         self._full_transcript = ""
-        self.result_queue: asyncio.Queue[dict] = asyncio.Queue()
+        self._result_queue: asyncio.Queue[dict] = asyncio.Queue()
         self._pending_tasks: list[asyncio.Task] = []
-        logger.info(f"[STT/Deepgram] Initialized (api_key={'SET' if self.api_key else 'MISSING'})")
+        # Sequencing: ensures results arrive in submission order
+        self._next_seq: int = 0
+        self._next_emit: int = 0
+        self._held: dict[int, dict] = {}  # seq -> result, waiting for ordering
+
+    @abstractmethod
+    async def _transcribe_pcm(self, pcm_bytes: bytes) -> str | None:
+        """
+        Provider-specific: transcribe raw PCM16 bytes and return text.
+        Return None if no speech detected or on error.
+        """
+        ...
 
     async def transcribe_chunk(self, audio_bytes: bytes) -> dict | None:
-        """Buffer audio. When full, fire non-blocking API call."""
+        """Buffer audio. When threshold is reached, fire a background task."""
         self._buffer.extend(audio_bytes)
-        logger.debug(f"[STT/Deepgram] Buffer: {len(self._buffer)}/{self.BUFFER_THRESHOLD} bytes")
 
         if len(self._buffer) < self.BUFFER_THRESHOLD:
             return None
 
         pcm_bytes = bytes(self._buffer)
         self._buffer.clear()
-        logger.info(f"[STT/Deepgram] Buffer full — firing transcription task ({len(pcm_bytes)} bytes)")
-        task = asyncio.create_task(self._transcribe_and_enqueue(pcm_bytes))
+
+        seq = self._next_seq
+        self._next_seq += 1
+
+        task = asyncio.create_task(self._transcribe_and_enqueue(pcm_bytes, seq))
         self._pending_tasks.append(task)
+        # Clean up finished tasks
         self._pending_tasks = [t for t in self._pending_tasks if not t.done()]
+        return None
+
+    async def _transcribe_and_enqueue(self, pcm_bytes: bytes, seq: int) -> None:
+        """Transcribe, filter, and enqueue result in sequence order."""
+        text = await self._transcribe_pcm(pcm_bytes)
+        if text:
+            text = _filter_hallucination(text)
+
+        if not text:
+            # Even empty results must be "emitted" to unblock sequencing
+            self._held[seq] = None
+        else:
+            self._full_transcript += " " + text
+            self._held[seq] = {"text": text, "is_final": True}
+
+        # Flush any results that are now in sequence order
+        while self._next_emit in self._held:
+            result = self._held.pop(self._next_emit)
+            self._next_emit += 1
+            if result is not None:
+                await self._result_queue.put(result)
+
+    async def get_result(self) -> dict | None:
+        try:
+            return self._result_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
+
+    async def flush(self) -> dict | None:
+        """Force-transcribe any remaining audio in the buffer."""
+        # Transcribe remaining buffer (no minimum — don't drop audio)
+        if len(self._buffer) > 0:
+            pcm_bytes = bytes(self._buffer)
+            self._buffer.clear()
+            text = await self._transcribe_pcm(pcm_bytes)
+            if text:
+                text = _filter_hallucination(text)
+                if text:
+                    self._full_transcript += " " + text
+                    await self._result_queue.put({"text": text, "is_final": True})
+
+        # Wait for all in-flight tasks to complete
+        if self._pending_tasks:
+            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+            self._pending_tasks.clear()
+
+        # Drain any remaining ordered results
+        results = []
+        while not self._result_queue.empty():
+            try:
+                r = self._result_queue.get_nowait()
+                results.append(r["text"])
+            except asyncio.QueueEmpty:
+                break
+
+        if results:
+            return {"text": " ".join(results), "is_final": True}
+        return None
+
+    def get_full_transcript(self) -> str:
+        return self._full_transcript.strip()
+
+    async def close(self) -> None:
+        """Cancel pending tasks and clean up."""
+        for task in self._pending_tasks:
+            if not task.done():
+                task.cancel()
+        if self._pending_tasks:
+            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+        self._pending_tasks.clear()
+        self._buffer.clear()
+        self._held.clear()
+        # Drain queue
+        while not self._result_queue.empty():
+            try:
+                self._result_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+
+# ═══════════════════════════════════════════════════════════════
+# Deepgram WebSocket Streaming (Nova-3)
+# ═══════════════════════════════════════════════════════════════
+
+class DeepgramSTTService(STTService):
+    """
+    Deepgram Nova-3 via persistent WebSocket streaming.
+
+    Opens a single WebSocket connection to Deepgram on first audio chunk.
+    Raw PCM bytes are piped directly — no buffering, no WAV conversion.
+    Deepgram streams back final transcripts in order.
+
+    Benefits over the old REST approach:
+      - 1 connection per session vs ~240 REST calls per 2-min debate
+      - No 500ms buffer delay — audio is sent immediately
+      - Results arrive in order (no sequencing needed)
+      - ~10x less API credit consumption
+    """
+
+    DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
+
+    def __init__(self):
+        settings = get_settings()
+        self.api_key = settings.deepgram_api_key
+        self._ws = None
+        self._listener_task: asyncio.Task | None = None
+        self._result_queue: asyncio.Queue[dict] = asyncio.Queue()
+        self._full_transcript = ""
+        self._connected = False
+        self._connecting = False
+        self._connect_lock = asyncio.Lock()
+        # Fallback REST client for batch transcription
+        self._http_client = httpx.AsyncClient(timeout=15.0)
+        logger.info(f"[STT/Deepgram] Initialized (api_key={'SET' if self.api_key else 'MISSING'})")
+
+    async def _ensure_connected(self) -> bool:
+        """Open WebSocket connection to Deepgram if not already connected."""
+        if self._connected and self._ws:
+            return True
+
+        async with self._connect_lock:
+            # Double-check after acquiring lock
+            if self._connected and self._ws:
+                return True
+
+            try:
+                import websockets
+
+                params = (
+                    f"?model=nova-3"
+                    f"&language=en"
+                    f"&encoding=linear16"
+                    f"&sample_rate=16000"
+                    f"&channels=1"
+                    f"&punctuate=true"
+                    f"&smart_format=true"
+                    f"&endpointing=300"
+                )
+                url = self.DEEPGRAM_WS_URL + params
+
+                self._ws = await websockets.connect(
+                    url,
+                    additional_headers={"Authorization": f"Token {self.api_key}"},
+                    ping_interval=20,
+                    ping_timeout=10,
+                    close_timeout=5,
+                )
+                self._connected = True
+                self._listener_task = asyncio.create_task(self._listen_loop())
+                logger.info("[STT/Deepgram] WebSocket connected")
+                return True
+
+            except Exception as e:
+                logger.error(f"[STT/Deepgram] WebSocket connection failed: {e}")
+                self._connected = False
+                self._ws = None
+                return False
+
+    async def _listen_loop(self) -> None:
+        """Background task: read Deepgram WebSocket messages and enqueue results."""
+        try:
+            async for raw_msg in self._ws:
+                try:
+                    data = json.loads(raw_msg)
+
+                    # Deepgram sends different message types
+                    msg_type = data.get("type", "")
+
+                    if msg_type == "Results":
+                        channel = data.get("channel", {})
+                        alternatives = channel.get("alternatives", [{}])
+                        transcript = alternatives[0].get("transcript", "") if alternatives else ""
+                        is_final = data.get("is_final", False)
+
+                        if transcript and is_final:
+                            text = _filter_hallucination(transcript)
+                            if text:
+                                self._full_transcript += " " + text
+                                await self._result_queue.put({
+                                    "text": text,
+                                    "is_final": True,
+                                })
+                                logger.info(f"[STT/Deepgram] Final: '{text}'")
+
+                    elif msg_type == "Metadata":
+                        logger.debug(f"[STT/Deepgram] Metadata: {data.get('request_id', 'unknown')}")
+
+                except json.JSONDecodeError:
+                    logger.warning("[STT/Deepgram] Non-JSON message received")
+
+        except asyncio.CancelledError:
+            logger.info("[STT/Deepgram] Listener cancelled")
+        except Exception as e:
+            logger.error(f"[STT/Deepgram] Listener error: {e}")
+            self._connected = False
+
+    async def transcribe_chunk(self, audio_bytes: bytes) -> dict | None:
+        """Send raw PCM bytes directly to Deepgram over WebSocket."""
+        if not await self._ensure_connected():
+            logger.warning("[STT/Deepgram] Not connected — dropping chunk")
+            return None
+
+        try:
+            await self._ws.send(audio_bytes)
+        except Exception as e:
+            logger.error(f"[STT/Deepgram] Send error: {e}")
+            self._connected = False
+
         return None
 
     async def get_result(self) -> dict | None:
         try:
-            return self.result_queue.get_nowait()
+            return self._result_queue.get_nowait()
         except asyncio.QueueEmpty:
             return None
 
-    async def _transcribe_and_enqueue(self, pcm_bytes: bytes) -> None:
-        result = await self._transcribe_pcm(pcm_bytes)
-        if result:
-            await self.result_queue.put(result)
-
-    async def _transcribe_pcm(self, pcm_bytes: bytes) -> dict | None:
-        """Core: PCM → WAV → Deepgram REST API → filtered text."""
-        wav_bytes = _pcm16_to_wav(pcm_bytes)
-
-        try:
-            start_t = time.time()
-            logger.info(f"[STT/Deepgram] Sending {len(wav_bytes)} bytes...")
-
-            response = await self.client.post(
-                "https://api.deepgram.com/v1/listen",
-                params={
-                    "model": "nova-3",
-                    "language": "en",
-                    "punctuate": "true",
-                    "smart_format": "true",
-                },
-                headers={
-                    "Authorization": f"Token {self.api_key}",
-                    "Content-Type": "audio/wav",
-                },
-                content=wav_bytes,
-            )
-            dur = time.time() - start_t
-
-            if response.status_code != 200:
-                logger.error(f"[STT/Deepgram] API error {response.status_code}: {response.text[:200]}")
-                return None
-
-            data = response.json()
-            text = (
-                data.get("results", {})
-                .get("channels", [{}])[0]
-                .get("alternatives", [{}])[0]
-                .get("transcript", "")
-            )
-            logger.info(f"[STT/Deepgram] Got '{text}' in {dur:.2f}s")
-
-            text = _filter_hallucination(text)
-            if text:
-                self._full_transcript += " " + text
-                return {"text": text, "is_final": True}
-
-        except httpx.TimeoutException:
-            logger.warning("[STT/Deepgram] Request timed out (10s)")
-        except Exception as e:
-            logger.error(f"[STT/Deepgram] Error: {e}")
-
-        return None
-
     async def flush(self) -> dict | None:
-        if len(self._buffer) < 1600:
-            if self._pending_tasks:
-                await asyncio.gather(*self._pending_tasks, return_exceptions=True)
-                self._pending_tasks.clear()
-            results = []
-            while not self.result_queue.empty():
-                try:
-                    r = self.result_queue.get_nowait()
-                    results.append(r["text"])
-                except asyncio.QueueEmpty:
-                    break
-            if results:
-                return {"text": " ".join(results), "is_final": True}
-            return None
-
-        pcm_bytes = bytes(self._buffer)
-        self._buffer.clear()
-        if self._pending_tasks:
-            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
-            self._pending_tasks.clear()
-        result = await self._transcribe_pcm(pcm_bytes)
-        all_texts = []
-        while not self.result_queue.empty():
+        """Tell Deepgram to finalize, then collect remaining results."""
+        if self._ws and self._connected:
             try:
-                r = self.result_queue.get_nowait()
-                all_texts.append(r["text"])
+                # Send Deepgram's close-stream message to flush final results
+                await self._ws.send(json.dumps({"type": "CloseStream"}))
+                # Give Deepgram a moment to send back final transcripts
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"[STT/Deepgram] Flush send error: {e}")
+
+        # Collect any remaining results
+        results = []
+        while not self._result_queue.empty():
+            try:
+                r = self._result_queue.get_nowait()
+                results.append(r["text"])
             except asyncio.QueueEmpty:
                 break
-        if result:
-            all_texts.append(result["text"])
-        if all_texts:
-            return {"text": " ".join(all_texts), "is_final": True}
-        return result
+
+        if results:
+            return {"text": " ".join(results), "is_final": True}
+        return None
 
     async def transcribe_batch(self, audio_bytes: bytes) -> str:
+        """Batch transcription via REST (used for post-session, not real-time)."""
         wav_bytes = _pcm16_to_wav(audio_bytes)
         try:
-            response = await self.client.post(
+            response = await self._http_client.post(
                 "https://api.deepgram.com/v1/listen",
                 params={"model": "nova-3", "language": "en", "punctuate": "true"},
                 headers={
@@ -296,6 +435,8 @@ class DeepgramSTTService(STTService):
                     .get("alternatives", [{}])[0]
                     .get("transcript", "")
                 )
+            else:
+                logger.error(f"[STT/Deepgram] Batch API error {response.status_code}")
         except Exception as e:
             logger.error(f"[STT/Deepgram] Batch error: {e}")
         return ""
@@ -304,64 +445,61 @@ class DeepgramSTTService(STTService):
         return self._full_transcript.strip()
 
     async def close(self) -> None:
-        await _cancel_pending_tasks(self._pending_tasks)
-        self._buffer.clear()
-        _drain_result_queue(self.result_queue)
+        """Shut down WebSocket and listener."""
+        if self._listener_task and not self._listener_task.done():
+            self._listener_task.cancel()
+            try:
+                await self._listener_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._listener_task = None
+
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+
+        self._connected = False
+
         try:
-            await self.client.aclose()
-        except Exception as e:
-            logger.warning(f"[STT/Deepgram] Client close error: {e}")
+            await self._http_client.aclose()
+        except Exception:
+            pass
+
+        # Drain queue
+        while not self._result_queue.empty():
+            try:
+                self._result_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
 
-# ═══════════════════════════════════════════════════════════
-# Groq Whisper API (kept as fallback)
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+# Groq Whisper API (fallback)
+# ═══════════════════════════════════════════════════════════════
 
-class GroqSTTService(STTService):
+class GroqSTTService(BatchSTTService):
     """
     Groq Whisper API (whisper-large-v3-turbo).
     Free tier but unreliable latency (0.5s to 24s per call).
     Kept as fallback if Deepgram is unavailable.
     """
 
-    BUFFER_THRESHOLD = 64_000
+    BUFFER_THRESHOLD = 32_000  # 1 second (was 2s — too slow)
 
     def __init__(self):
+        super().__init__()
         from openai import AsyncOpenAI
         settings = get_settings()
-        self.client = AsyncOpenAI(
+        self._client = AsyncOpenAI(
             api_key=settings.groq_api_key,
             base_url=settings.groq_base_url,
         )
-        self._buffer = bytearray()
-        self._full_transcript = ""
-        self.result_queue: asyncio.Queue[dict] = asyncio.Queue()
-        self._pending_tasks: list[asyncio.Task] = []
 
-    async def transcribe_chunk(self, audio_bytes: bytes) -> dict | None:
-        self._buffer.extend(audio_bytes)
-        if len(self._buffer) < self.BUFFER_THRESHOLD:
-            return None
-
-        pcm_bytes = bytes(self._buffer)
-        self._buffer.clear()
-        task = asyncio.create_task(self._transcribe_and_enqueue(pcm_bytes))
-        self._pending_tasks.append(task)
-        self._pending_tasks = [t for t in self._pending_tasks if not t.done()]
-        return None
-
-    async def get_result(self) -> dict | None:
-        try:
-            return self.result_queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return None
-
-    async def _transcribe_and_enqueue(self, pcm_bytes: bytes) -> None:
-        result = await self._transcribe_pcm(pcm_bytes)
-        if result:
-            await self.result_queue.put(result)
-
-    async def _transcribe_pcm(self, pcm_bytes: bytes) -> dict | None:
+    async def _transcribe_pcm(self, pcm_bytes: bytes) -> str | None:
+        """Send WAV to Groq Whisper API."""
         wav_bytes = _pcm16_to_wav(pcm_bytes)
         try:
             audio_file = io.BytesIO(wav_bytes)
@@ -370,67 +508,28 @@ class GroqSTTService(STTService):
             start_t = time.time()
             logger.info(f"[STT/Groq] Calling API with {len(wav_bytes)} bytes...")
 
-            response = await self.client.audio.transcriptions.create(
+            response = await self._client.audio.transcriptions.create(
                 model="whisper-large-v3-turbo",
                 file=audio_file,
                 language="en",
                 response_format="text",
             )
             dur = time.time() - start_t
-            logger.info(f"[STT/Groq] API returned in {dur:.2f}s")
-
             text = response.strip() if isinstance(response, str) else response.text.strip()
-            text = _filter_hallucination(text)
-            if text:
-                self._full_transcript += " " + text
-                return {"text": text, "is_final": True}
+            logger.info(f"[STT/Groq] Got '{text}' in {dur:.2f}s")
+            return text if text else None
 
         except Exception as e:
             logger.error(f"[STT/Groq] API error: {e}")
         return None
 
-    async def flush(self) -> dict | None:
-        if len(self._buffer) < 1600:
-            if self._pending_tasks:
-                await asyncio.gather(*self._pending_tasks, return_exceptions=True)
-                self._pending_tasks.clear()
-            results = []
-            while not self.result_queue.empty():
-                try:
-                    r = self.result_queue.get_nowait()
-                    results.append(r["text"])
-                except asyncio.QueueEmpty:
-                    break
-            if results:
-                return {"text": " ".join(results), "is_final": True}
-            return None
-
-        pcm_bytes = bytes(self._buffer)
-        self._buffer.clear()
-        if self._pending_tasks:
-            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
-            self._pending_tasks.clear()
-        result = await self._transcribe_pcm(pcm_bytes)
-        all_texts = []
-        while not self.result_queue.empty():
-            try:
-                r = self.result_queue.get_nowait()
-                all_texts.append(r["text"])
-            except asyncio.QueueEmpty:
-                break
-        if result:
-            all_texts.append(result["text"])
-        if all_texts:
-            return {"text": " ".join(all_texts), "is_final": True}
-        return result
-
     async def transcribe_batch(self, audio_bytes: bytes) -> str:
-        from openai import AsyncOpenAI
+        """Batch transcription for post-session."""
         wav_bytes = _pcm16_to_wav(audio_bytes)
         audio_file = io.BytesIO(wav_bytes)
         audio_file.name = "audio.wav"
         try:
-            response = await self.client.audio.transcriptions.create(
+            response = await self._client.audio.transcriptions.create(
                 model="whisper-large-v3-turbo",
                 file=audio_file,
                 language="en",
@@ -441,33 +540,29 @@ class GroqSTTService(STTService):
             logger.error(f"[STT/Groq] Batch error: {e}")
             return ""
 
-    def get_full_transcript(self) -> str:
-        return self._full_transcript.strip()
-
     async def close(self) -> None:
-        await _cancel_pending_tasks(self._pending_tasks)
-        self._buffer.clear()
-        _drain_result_queue(self.result_queue)
+        await super().close()
         try:
-            await _close_client_if_supported(self.client)
-        except Exception as e:
-            logger.warning(f"[STT/Groq] Client close error: {e}")
+            await self._client.close()
+        except Exception:
+            pass
 
 
-# ═══════════════════════════════════════════════════════════
-# Local faster-whisper (Edge mode - no API needed)
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+# Local faster-whisper (Edge mode — no API needed)
+# ═══════════════════════════════════════════════════════════════
 
-class LocalSTTService(STTService):
+class LocalSTTService(BatchSTTService):
     """
     Local STT using faster-whisper (CTranslate2 backend).
     Runs on CPU with int8 quantization. No API key needed.
     Model downloads automatically on first use (~150MB for 'base').
     """
 
-    BUFFER_THRESHOLD = 64_000
+    BUFFER_THRESHOLD = 32_000  # 1 second (was 2s)
 
     def __init__(self):
+        super().__init__()
         settings = get_settings()
         model_size = settings.faster_whisper_model
         logger.info(f"[STT/Local] Loading faster-whisper model '{model_size}' (int8, CPU)...")
@@ -478,43 +573,14 @@ class LocalSTTService(STTService):
             device="cpu",
             compute_type="int8",
         )
-        logger.info(f"[STT/Local] Model loaded successfully")
+        logger.info("[STT/Local] Model loaded successfully")
 
-        self._buffer = bytearray()
-        self._full_transcript = ""
-        self.result_queue: asyncio.Queue[dict] = asyncio.Queue()
-        self._pending_tasks: list[asyncio.Task] = []
-
-    async def transcribe_chunk(self, audio_bytes: bytes) -> dict | None:
-        self._buffer.extend(audio_bytes)
-        if len(self._buffer) < self.BUFFER_THRESHOLD:
-            return None
-
-        pcm_bytes = bytes(self._buffer)
-        self._buffer.clear()
-        task = asyncio.create_task(self._transcribe_and_enqueue(pcm_bytes))
-        self._pending_tasks.append(task)
-        self._pending_tasks = [t for t in self._pending_tasks if not t.done()]
-        return None
-
-    async def get_result(self) -> dict | None:
-        try:
-            return self.result_queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return None
-
-    async def _transcribe_and_enqueue(self, pcm_bytes: bytes) -> None:
-        result = await self._transcribe_pcm(pcm_bytes)
-        if result:
-            await self.result_queue.put(result)
-
-    async def _transcribe_pcm(self, pcm_bytes: bytes) -> dict | None:
+    async def _transcribe_pcm(self, pcm_bytes: bytes) -> str | None:
         """Transcribe PCM in a thread pool to avoid blocking the event loop."""
         import numpy as np
 
         try:
             start_t = time.time()
-            # Convert PCM16 bytes to float32 numpy array
             audio_array = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
             # Run in thread pool (faster-whisper is sync/CPU-bound)
@@ -522,64 +588,22 @@ class LocalSTTService(STTService):
                 self.model.transcribe,
                 audio_array,
                 language="en",
-                beam_size=1,  # Fastest decoding
-                vad_filter=True,  # Built-in VAD
+                beam_size=1,
+                vad_filter=True,
             )
 
-            # Collect all segment texts
-            text_parts = []
-            for segment in segments:
-                text_parts.append(segment.text.strip())
-
+            text_parts = [segment.text.strip() for segment in segments]
             text = " ".join(text_parts)
             dur = time.time() - start_t
             logger.info(f"[STT/Local] Transcribed in {dur:.2f}s: '{text}'")
-
-            text = _filter_hallucination(text)
-            if text:
-                self._full_transcript += " " + text
-                return {"text": text, "is_final": True}
+            return text if text else None
 
         except Exception as e:
             logger.error(f"[STT/Local] Error: {e}")
         return None
 
-    async def flush(self) -> dict | None:
-        if len(self._buffer) < 1600:
-            if self._pending_tasks:
-                await asyncio.gather(*self._pending_tasks, return_exceptions=True)
-                self._pending_tasks.clear()
-            results = []
-            while not self.result_queue.empty():
-                try:
-                    r = self.result_queue.get_nowait()
-                    results.append(r["text"])
-                except asyncio.QueueEmpty:
-                    break
-            if results:
-                return {"text": " ".join(results), "is_final": True}
-            return None
-
-        pcm_bytes = bytes(self._buffer)
-        self._buffer.clear()
-        if self._pending_tasks:
-            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
-            self._pending_tasks.clear()
-        result = await self._transcribe_pcm(pcm_bytes)
-        all_texts = []
-        while not self.result_queue.empty():
-            try:
-                r = self.result_queue.get_nowait()
-                all_texts.append(r["text"])
-            except asyncio.QueueEmpty:
-                break
-        if result:
-            all_texts.append(result["text"])
-        if all_texts:
-            return {"text": " ".join(all_texts), "is_final": True}
-        return result
-
     async def transcribe_batch(self, audio_bytes: bytes) -> str:
+        """Batch transcription for post-session."""
         import numpy as np
         try:
             audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
@@ -595,18 +619,10 @@ class LocalSTTService(STTService):
             logger.error(f"[STT/Local] Batch error: {e}")
             return ""
 
-    def get_full_transcript(self) -> str:
-        return self._full_transcript.strip()
 
-    async def close(self) -> None:
-        await _cancel_pending_tasks(self._pending_tasks)
-        self._buffer.clear()
-        _drain_result_queue(self.result_queue)
-
-
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 # Factory
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 
 def get_stt_service(mode: str) -> STTService:
     """
@@ -627,7 +643,7 @@ def get_stt_service(mode: str) -> STTService:
         if not settings.deepgram_api_key:
             logger.warning("[STT] No DEEPGRAM_API_KEY set, falling back to Groq")
             return GroqSTTService()
-        logger.info("[STT] Creating DeepgramSTTService (Nova-3)")
+        logger.info("[STT] Creating DeepgramSTTService (Nova-3 WebSocket Streaming)")
         return DeepgramSTTService()
 
     if provider == "faster-whisper":
