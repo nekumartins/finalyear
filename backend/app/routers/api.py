@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy.orm import selectinload
 
+from backend.app.config import get_settings
 from backend.app.db.models import Session, User
 from backend.app.db.session import get_db
 from backend.app.services.auth_service import get_current_user
@@ -26,13 +27,15 @@ async def health_check():
 
 
 @router.get("/test-stt")
-async def test_stt():
-    """Test Deepgram STT with a silent audio clip — verifies API key and connectivity."""
+async def test_stt(user: User = Depends(get_current_user)):
+    """Debug-only STT connectivity check (authenticated)."""
     import io, struct
-    from backend.app.config import get_settings
     import httpx
 
     settings = get_settings()
+    if not settings.debug:
+        raise HTTPException(status_code=404, detail="Not found")
+
     key = settings.deepgram_api_key
     if not key:
         return {"error": "No DEEPGRAM_API_KEY configured"}

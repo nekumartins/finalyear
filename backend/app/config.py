@@ -2,6 +2,7 @@
 Debate Coach Backend - Configuration
 Loads environment variables with sensible defaults.
 """
+import secrets
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -11,7 +12,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://debate:debate_pass@localhost:5432/debate_coach"
 
     # Auth
-    secret_key: str = "change-me-generate-with-openssl-rand-hex-32"
+    # Uses a random process-local key if SECRET_KEY is not provided.
+    # For production, set SECRET_KEY explicitly to keep tokens stable across restarts.
+    secret_key: str = secrets.token_hex(32)
 
     # Groq API (Cloud Path) — free at console.groq.com
     groq_api_key: str = ""
@@ -29,7 +32,7 @@ class Settings(BaseSettings):
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
-    debug: bool = True
+    debug: bool = False
 
     # Edge Model Paths
     vosk_model_path: str = "models/edge/vosk-model-small-en-us"

@@ -23,8 +23,6 @@ services:
       POSTGRES_USER: debate
       POSTGRES_PASSWORD: debate_pass
       POSTGRES_DB: debate_coach
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -41,13 +39,24 @@ services:
     container_name: debate-coach-app
     ports:
       - "8000:8000"
+    command: >
+      sh -c "python -m backend.app.db.init_db &&
+             python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000"
     env_file:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://debate:debate_pass@postgres:5432/debate_coach
+      DEBUG: "false"
+      SECRET_KEY: "${SECRET_KEY:?set SECRET_KEY in .env}"
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
 
 volumes:

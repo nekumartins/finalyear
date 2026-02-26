@@ -11,9 +11,27 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useDebateStore } from "../stores/debateStore";
 
+const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
+
+const getWsOrigin = () => {
+  // Optional explicit override (useful when frontend/backend are on different hosts).
+  const explicitWs = import.meta.env.VITE_WS_URL as string | undefined;
+  if (explicitWs) return trimTrailingSlash(explicitWs);
+
+  // Derive WS origin from configured backend HTTP URL when provided.
+  const backendUrl = import.meta.env.VITE_BACKEND_URL as string | undefined;
+  if (backendUrl) {
+    const parsed = new URL(backendUrl, window.location.origin);
+    const protocol = parsed.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${parsed.host}`;
+  }
+
+  // Default to current origin in production (single-container deploy).
+  return `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+};
+
 const getWsUrl = () => {
-  // Direct connection to bypass Vite proxy issues
-  const base = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//127.0.0.1:8000/ws/debate`;
+  const base = `${getWsOrigin()}/ws/debate`;
   const token = localStorage.getItem("token");
   return token ? `${base}?token=${token}` : base;
 };
