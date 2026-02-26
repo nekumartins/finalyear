@@ -1,9 +1,10 @@
 /**
- * HomePage — Session setup with premium hero, animated topic cards, styled toggles.
+ * HomePage — New debate session setup.
  */
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDebateStore, SessionMode } from "../stores/debateStore";
+import { useAppStore } from "../stores/appStore";
 
 const SAMPLE_TOPICS = [
   { text: "Social media does more harm than good", emoji: "📱" },
@@ -23,10 +24,20 @@ export function HomePage() {
   const navigate = useNavigate();
   const setConfig = useDebateStore((s) => s.setConfig);
   const reset = useDebateStore((s) => s.reset);
+  const preferredMode = useAppStore((s) => s.preferredMode);
+  const preferredPosition = useAppStore((s) => s.preferredPosition);
 
   const [topic, setTopic] = useState("");
-  const [position, setPosition] = useState<"for" | "against">("for");
-  const [mode, setMode] = useState<SessionMode>("cloud");
+  const [position, setPosition] = useState<"for" | "against">(preferredPosition);
+  const [mode, setMode] = useState<SessionMode>(preferredMode);
+
+  useEffect(() => {
+    setMode(preferredMode);
+  }, [preferredMode]);
+
+  useEffect(() => {
+    setPosition(preferredPosition);
+  }, [preferredPosition]);
 
   const handleStart = () => {
     if (!topic.trim()) return;
@@ -41,16 +52,15 @@ export function HomePage() {
       <div style={styles.hero}>
         <div style={styles.heroBadge}>
           <span style={styles.heroBadgeDot} />
-          AI-Powered Debate Practice
+          New Session
         </div>
         <h1 style={styles.heroTitle}>
-          <span className="gradient-text">Sharpen Your</span>
+          <span className="gradient-text">Set Up Your</span>
           <br />
-          Argument Skills
+          Next Debate
         </h1>
         <p style={styles.heroSubtitle}>
-          Go head-to-head with an AI sparring partner. Get real-time analysis,
-          pacing feedback, and instant scoring.
+          Pick a topic, choose your side, and launch a full real-time practice round.
         </p>
         {/* Stats bar */}
         <div style={styles.statsBar}>

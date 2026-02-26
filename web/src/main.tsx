@@ -1,14 +1,19 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { HomePage } from "./pages/HomePage";
 import { DebatePage } from "./pages/DebatePage";
 import { MetricsPage } from "./pages/MetricsPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { SessionPage } from "./pages/SessionPage";
 import { AuthPage } from "./pages/AuthPage";
+import { DashboardPage } from "./pages/DashboardPage";
+import { OnboardingPage } from "./pages/OnboardingPage";
+import { ProfilePage } from "./pages/ProfilePage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { Layout } from "./components/Layout";
 import { ProtectedRoute } from "./components/ProtectedRoute";
+import { OnboardingGuard } from "./components/OnboardingGuard";
 import "./styles/global.css";
 
 import { GoogleOAuthProvider } from "@react-oauth/google";
@@ -25,12 +30,19 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 
           {/* Protected routes */}
           <Route element={<ProtectedRoute />}>
-            <Route element={<Layout />}>
-              <Route path="/" element={<HomePage />} />
-              <Route path="/debate" element={<DebatePage />} />
-              <Route path="/metrics" element={<MetricsPage />} />
-              <Route path="/history" element={<HistoryPage />} />
-              <Route path="/history/:sessionId" element={<SessionPage />} />
+            <Route path="/onboarding" element={<OnboardingPage />} />
+            <Route element={<OnboardingGuard />}>
+              <Route element={<Layout />}>
+                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/dashboard" element={<DashboardPage />} />
+                <Route path="/new-debate" element={<HomePage />} />
+                <Route path="/debate" element={<DebatePage />} />
+                <Route path="/metrics" element={<MetricsPage />} />
+                <Route path="/history" element={<HistoryPage />} />
+                <Route path="/history/:sessionId" element={<SessionPage />} />
+                <Route path="/profile" element={<ProfilePage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+              </Route>
             </Route>
           </Route>
         </Routes>

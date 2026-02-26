@@ -69,11 +69,11 @@ export function HistoryPage() {
           <h1 style={styles.pageTitle}>Session History</h1>
           <p style={styles.pageSubtitle}>Review your past debates and track improvement</p>
         </div>
-        <button
-          className="btn-primary"
-          onClick={() => navigate("/")}
-          style={styles.newBtn}
-        >
+          <button
+            className="btn-primary"
+            onClick={() => navigate("/new-debate")}
+            style={styles.newBtn}
+          >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style={{ verticalAlign: "middle" }}>
             <path d="M12 5v14M5 12h14" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
           </svg>
@@ -95,7 +95,7 @@ export function HistoryPage() {
           <p style={styles.emptyDesc}>
             Complete a debate session and it will appear here with full analytics.
           </p>
-          <button className="btn-primary" onClick={() => navigate("/")}>
+          <button className="btn-primary" onClick={() => navigate("/new-debate")}>
             Start your first debate
           </button>
         </div>
@@ -107,7 +107,7 @@ export function HistoryPage() {
               key={s.id}
               className="glass"
               style={{ ...styles.card, animationDelay: `${idx * 0.06}s` }}
-              onClick={() => (window.location.href = `/history/${s.id}`)}
+              onClick={() => navigate(`/history/${s.id}`)}
             >
               {/* Top row */}
               <div style={styles.cardTop}>

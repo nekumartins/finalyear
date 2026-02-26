@@ -91,7 +91,7 @@ export function MetricsPage() {
         <div style={styles.emptyIcon}>📊</div>
         <h2 style={styles.emptyTitle}>No session data yet</h2>
         <p style={styles.emptyDesc}>Complete a debate session to see your metrics here.</p>
-        <button className="btn-primary" onClick={() => navigate("/")}>
+        <button className="btn-primary" onClick={() => navigate("/new-debate")}>
           Start a Debate
         </button>
       </div>
@@ -135,7 +135,7 @@ export function MetricsPage() {
           <p style={styles.topicLabel}>{topic}</p>
         </div>
         <div style={styles.actions}>
-          <button className="btn-primary" onClick={() => navigate("/")}>
+          <button className="btn-primary" onClick={() => navigate("/new-debate")}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style={{ verticalAlign: "middle", marginRight: 6 }}>
               <circle cx="12" cy="12" r="10" stroke="white" strokeWidth="2" />
               <path d="M10 8l4 4-4 4" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />

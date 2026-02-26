@@ -4,15 +4,19 @@
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
 import React from "react";
 import { useAuthStore } from "../stores/authStore";
+import { useAppStore } from "../stores/appStore";
 
 const navItems = [
-  { to: "/", label: "Home" },
-  { to: "/debate", label: "Debate" },
+  { to: "/dashboard", label: "Dashboard" },
+  { to: "/new-debate", label: "New Debate" },
   { to: "/history", label: "History" },
+  { to: "/profile", label: "Profile" },
+  { to: "/settings", label: "Settings" },
 ];
 
 export function Layout() {
   const { user, logout } = useAuthStore();
+  const profileName = useAppStore((s) => s.profileName);
   const navigate = useNavigate();
 
   const handleLogout = () => {
@@ -20,8 +24,9 @@ export function Layout() {
     navigate("/auth");
   };
 
-  const initials = user?.name
-    ? user.name
+  const name = profileName || user?.name || "User";
+  const initials = name
+    ? name
       .split(" ")
       .map((n) => n[0])
       .join("")
@@ -64,9 +69,10 @@ export function Layout() {
 
           {user && (
             <div style={styles.userMenu}>
-              <div style={styles.avatar} title={user.name}>
+              <div style={styles.avatar} title={name}>
                 {initials}
               </div>
+              <span style={styles.userName}>{name}</span>
               <button onClick={handleLogout} style={styles.logoutBtn}>
                 Sign out
               </button>
@@ -122,16 +128,18 @@ const styles: Record<string, React.CSSProperties> = {
   right: {
     display: "flex",
     alignItems: "center",
-    gap: "24px",
+    gap: "16px",
   },
   links: {
     display: "flex",
     gap: "4px",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
   },
   link: {
-    fontSize: "0.875rem",
+    fontSize: "0.82rem",
     fontWeight: 500,
-    padding: "6px 14px",
+    padding: "6px 11px",
     borderRadius: "20px",
     transition: "all 0.2s",
     textDecoration: "none",
@@ -139,9 +147,18 @@ const styles: Record<string, React.CSSProperties> = {
   userMenu: {
     display: "flex",
     alignItems: "center",
-    gap: "12px",
-    paddingLeft: "20px",
+    gap: "8px",
+    paddingLeft: "14px",
     borderLeft: "1px solid var(--border)",
+  },
+  userName: {
+    color: "var(--text-secondary)",
+    fontSize: "0.8rem",
+    fontWeight: 600,
+    maxWidth: "110px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
   },
   avatar: {
     width: 34,
@@ -161,8 +178,8 @@ const styles: Record<string, React.CSSProperties> = {
     background: "transparent",
     border: "1px solid var(--border)",
     color: "var(--text-secondary)",
-    padding: "6px 14px",
-    fontSize: "0.8rem",
+    padding: "6px 10px",
+    fontSize: "0.75rem",
     fontWeight: 500,
     borderRadius: "20px",
     cursor: "pointer",

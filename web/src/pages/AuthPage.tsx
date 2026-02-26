@@ -33,13 +33,13 @@ export function AuthPage() {
         } else {
             ok = await register(email, password, name);
         }
-        if (ok) navigate("/");
+        if (ok) navigate("/dashboard");
     };
 
     const handleGoogleSuccess = async (response: any) => {
         if (response.credential) {
             const ok = await loginWithGoogle(response.credential);
-            if (ok) navigate("/");
+            if (ok) navigate("/dashboard");
         }
     };
 

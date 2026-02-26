@@ -71,7 +71,7 @@ export function DebatePage() {
   // Start session on mount
   useEffect(() => {
     if (!topic) {
-      navigate("/");
+      navigate("/new-debate");
       return;
     }
     startSession(topic, userPosition, mode);
