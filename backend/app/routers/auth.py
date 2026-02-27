@@ -55,55 +55,73 @@ class AuthResponse(BaseModel):
 @router.post("/register", response_model=AuthResponse)
 async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     """Create a new user with email and password."""
-    # Check if email already exists
-    result = await db.execute(select(User).where(User.email == req.email))
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered",
+    try:
+        # Check if email already exists
+        result = await db.execute(select(User).where(User.email == req.email))
+        if result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered",
+            )
+
+        user = User(
+            email=req.email,
+            name=req.name,
+            hashed_password=hash_password(req.password),
+            auth_provider="local",
         )
+        db.add(user)
+        await db.flush()  # Populate user.id
 
-    user = User(
-        email=req.email,
-        name=req.name,
-        hashed_password=hash_password(req.password),
-        auth_provider="local",
-    )
-    db.add(user)
-    await db.flush()  # Populate user.id
+        token = create_access_token(user.id, user.email)
 
-    token = create_access_token(user.id, user.email)
-
-    return AuthResponse(
-        access_token=token,
-        user={"id": user.id, "email": user.email, "name": user.name},
-    )
+        return AuthResponse(
+            access_token=token,
+            user={"id": user.id, "email": user.email, "name": user.name},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Register DB error for email=%s: %s", req.email, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error during registration: {type(exc).__name__}: {exc}",
+        )
 
 
 @router.post("/login", response_model=AuthResponse)
 async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     """Authenticate with email and password, returns JWT."""
-    result = await db.execute(select(User).where(User.email == req.email))
-    user = result.scalar_one_or_none()
+    try:
+        result = await db.execute(select(User).where(User.email == req.email))
+        user = result.scalar_one_or_none()
 
-    if not user or not user.hashed_password:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+        if not user or not user.hashed_password:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password",
+            )
+
+        if not verify_password(req.password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password",
+            )
+
+        token = create_access_token(user.id, user.email)
+
+        return AuthResponse(
+            access_token=token,
+            user={"id": user.id, "email": user.email, "name": user.name},
         )
-
-    if not verify_password(req.password, user.hashed_password):
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Login DB error for email=%s: %s", req.email, exc)
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error during login: {type(exc).__name__}: {exc}",
         )
-
-    token = create_access_token(user.id, user.email)
-
-    return AuthResponse(
-        access_token=token,
-        user={"id": user.id, "email": user.email, "name": user.name},
-    )
 
 
 @router.post("/google", response_model=AuthResponse)
@@ -165,34 +183,44 @@ async def google_auth(req: GoogleAuthRequest, db: AsyncSession = Depends(get_db)
             detail="Invalid Google token audience",
         )
 
-    # Try to find existing user by google_id or email
-    result = await db.execute(
-        select(User).where((User.google_id == google_id) | (User.email == email))
-    )
-    user = result.scalar_one_or_none()
-
-    if user:
-        # Link Google ID if not already linked
-        if not user.google_id:
-            user.google_id = google_id
-            user.auth_provider = "google"
-    else:
-        # Create new user
-        user = User(
-            email=email,
-            name=name,
-            auth_provider="google",
-            google_id=google_id,
+    # ── Database operations (wrapped for diagnostics) ──
+    try:
+        # Try to find existing user by google_id or email
+        result = await db.execute(
+            select(User).where((User.google_id == google_id) | (User.email == email))
         )
-        db.add(user)
-        await db.flush()
+        user = result.scalar_one_or_none()
 
-    token = create_access_token(user.id, user.email)
+        if user:
+            # Link Google ID if not already linked
+            if not user.google_id:
+                user.google_id = google_id
+                user.auth_provider = "google"
+        else:
+            # Create new user
+            user = User(
+                email=email,
+                name=name,
+                auth_provider="google",
+                google_id=google_id,
+            )
+            db.add(user)
+            await db.flush()
 
-    return AuthResponse(
-        access_token=token,
-        user={"id": user.id, "email": user.email, "name": user.name},
-    )
+        token = create_access_token(user.id, user.email)
+
+        return AuthResponse(
+            access_token=token,
+            user={"id": user.id, "email": user.email, "name": user.name},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Google auth DB error for email=%s: %s", email, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error during Google auth: {type(exc).__name__}: {exc}",
+        )
 
 
 @router.get("/me")

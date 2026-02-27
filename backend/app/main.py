@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from backend.app.config import get_settings
+from backend.app.db.init_db import init_db
 from backend.app.routers.api import router as api_router
 from backend.app.routers.auth import router as auth_router
 from backend.app.routers.ws_handler import DebateWebSocketHandler
@@ -32,6 +33,14 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle."""
     logger.info(f"🎙️ Debate Coach Backend starting (mode={settings.default_mode})")
     logger.info(f"📡 WebSocket endpoint: ws://{settings.host}:{settings.port}/ws/debate")
+
+    # Ensure database tables exist (idempotent CREATE IF NOT EXISTS)
+    try:
+        await init_db()
+        logger.info("✅ Database tables verified/created")
+    except Exception:
+        logger.exception("❌ Failed to initialise database tables")
+
     yield
     logger.info("Debate Coach Backend shutting down")
 
