@@ -47,6 +47,7 @@ export function useWebSocket() {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
   const heartbeatTimer = useRef<ReturnType<typeof setInterval>>();
   const reconnectAttempts = useRef(0);
+  const intentionalCloseRef = useRef(false);
 
   // Track last session info for resume
   const lastSessionRef = useRef<{
@@ -87,13 +88,16 @@ export function useWebSocket() {
   // ── Connection ────────────────────────────────────
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    const state = wsRef.current?.readyState;
+    if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return;
 
+    intentionalCloseRef.current = false;
     const ws = new WebSocket(getWsUrl());
     wsRef.current = ws;
     let wasOpened = false; // Track if this WS ever completed handshake
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) return;
       wasOpened = true;
       console.log("[WS] Connected");
       reconnectAttempts.current = 0;
@@ -101,6 +105,7 @@ export function useWebSocket() {
     };
 
     ws.onmessage = (event) => {
+      if (wsRef.current !== ws) return;
       try {
         const msg = JSON.parse(event.data);
         handleMessage(msg);
@@ -109,15 +114,27 @@ export function useWebSocket() {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      if (wsRef.current !== ws) return;
+      wsRef.current = null;
+      stopHeartbeat();
+
+      if (intentionalCloseRef.current) {
+        intentionalCloseRef.current = false;
+        const status = useDebateStore.getState().status;
+        if (status !== "ended") setStatus("idle");
+        return;
+      }
+
       // Suppress logs for StrictMode phantom connections (never fully opened)
       if (!wasOpened) return;
-      console.log("[WS] Disconnected");
-      stopHeartbeat();
+      const reason = event.reason ? `, reason=${event.reason}` : "";
+      console.log(`[WS] Disconnected (code=${event.code}${reason})`);
 
       // Auto-reconnect with exponential backoff if session was active
       const status = useDebateStore.getState().status;
       if (status === "active" && reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
+        setStatus("connecting");
         const delay = Math.min(
           RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectAttempts.current),
           RECONNECT_MAX_DELAY_MS
@@ -150,30 +167,39 @@ export function useWebSocket() {
             checkAndResend();
           }
         }, delay);
+      } else if (status === "active" || status === "connecting") {
+        setStatus("idle");
+        console.error("[WS] Reconnect attempts exhausted");
       }
     };
 
     ws.onerror = () => {
+      if (wsRef.current !== ws || intentionalCloseRef.current) return;
       // Suppress error for StrictMode phantom connections
       if (!wasOpened) return;
       console.error("[WS] Connection error");
     };
-  }, [startHeartbeat, stopHeartbeat]);
+  }, [setStatus, startHeartbeat, stopHeartbeat]);
 
   const disconnect = useCallback(() => {
+    intentionalCloseRef.current = true;
     clearTimeout(reconnectTimer.current);
     stopHeartbeat();
     reconnectAttempts.current = MAX_RECONNECT_ATTEMPTS; // Prevent auto-reconnect
     wsRef.current?.close();
-    wsRef.current = null;
     lastSessionRef.current = null;
   }, [stopHeartbeat]);
 
-  const send = useCallback((msg: Record<string, unknown>) => {
+  const send = useCallback((
+    msg: Record<string, unknown>,
+    options?: { suppressDisconnectedWarning?: boolean },
+  ) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(msg));
     } else {
-      console.warn("[WS] Cannot send — not connected");
+      if (!options?.suppressDisconnectedWarning) {
+        console.warn("[WS] Cannot send — not connected");
+      }
     }
   }, []);
 
@@ -218,7 +244,7 @@ export function useWebSocket() {
         chunk_b64: chunkB64,
         timestamp_ms: Date.now(),
         sample_rate: 16000,
-      });
+      }, { suppressDisconnectedWarning: true });
     },
     [send]
   );

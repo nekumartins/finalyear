@@ -84,6 +84,20 @@ export function DebatePage() {
     }
   }, [status, isRecording, startAudio]);
 
+  // Stop audio capture whenever session is not actively streaming.
+  useEffect(() => {
+    if (status !== "active" && isRecording) {
+      stopAudio();
+    }
+  }, [status, isRecording, stopAudio]);
+
+  // Ensure mic resources are always released on page unmount.
+  useEffect(() => {
+    return () => {
+      stopAudio();
+    };
+  }, [stopAudio]);
+
   // Navigate to metrics when session ends
   useEffect(() => {
     if (status === "ended") {

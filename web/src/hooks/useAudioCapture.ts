@@ -8,7 +8,7 @@
  * and give the hardware default (44100 or 48000 Hz). This hook detects
  * the mismatch and resamples to the target rate before encoding.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface AudioCaptureOptions {
   onChunk: (chunkB64: string) => void;
@@ -47,6 +47,8 @@ export function useAudioCapture({
   const processorRef = useRef<ScriptProcessorNode | null>(null);
 
   const start = useCallback(async () => {
+    if (streamRef.current || contextRef.current || processorRef.current) return;
+
     try {
       // Request microphone
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -126,6 +128,17 @@ export function useAudioCapture({
     contextRef.current = null;
     streamRef.current = null;
     setIsRecording(false);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      processorRef.current?.disconnect();
+      contextRef.current?.close();
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      processorRef.current = null;
+      contextRef.current = null;
+      streamRef.current = null;
+    };
   }, []);
 
   return { isRecording, hasPermission, start, stop };
