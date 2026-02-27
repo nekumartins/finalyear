@@ -4,6 +4,9 @@ Integration Tests: Auth API — register, login, /me, and error cases.
 These tests hit the actual FastAPI endpoints with a real SQLite database.
 """
 import pytest
+import httpx
+
+from backend.app.routers import auth as auth_router
 
 
 class TestRegister:
@@ -147,3 +150,86 @@ class TestTokenReuse:
             "Authorization": f"Bearer {token}"
         })
         assert me_resp.status_code == 200
+
+
+class TestGoogleAuth:
+    @pytest.mark.asyncio
+    async def test_google_auth_success(self, client, monkeypatch):
+        """Valid Google token returns app JWT and user profile."""
+
+        class FakeResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {
+                    "sub": "google-sub-123",
+                    "email": "google@user.com",
+                    "name": "Google User",
+                    "aud": "test-google-client-id",
+                }
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url):
+                return FakeResponse()
+
+        monkeypatch.setenv("VITE_GOOGLE_CLIENT_ID", "test-google-client-id")
+        monkeypatch.setattr(auth_router.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
+
+        resp = await client.post("/api/auth/google", json={"id_token": "valid-token"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "access_token" in body
+        assert body["user"]["email"] == "google@user.com"
+        assert body["user"]["name"] == "Google User"
+
+    @pytest.mark.asyncio
+    async def test_google_auth_invalid_token(self, client, monkeypatch):
+        """Google rejected token should return 401."""
+
+        class FakeResponse:
+            status_code = 401
+
+            @staticmethod
+            def json():
+                return {"error_description": "Invalid Value"}
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url):
+                return FakeResponse()
+
+        monkeypatch.setattr(auth_router.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
+
+        resp = await client.post("/api/auth/google", json={"id_token": "bad-token"})
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_google_auth_upstream_failure_returns_503(self, client, monkeypatch):
+        """Network issues to Google endpoint should return 503, not 500."""
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url):
+                raise httpx.ConnectError("connection failed")
+
+        monkeypatch.setattr(auth_router.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
+
+        resp = await client.post("/api/auth/google", json={"id_token": "any-token"})
+        assert resp.status_code == 503

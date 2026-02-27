@@ -8,6 +8,7 @@ Endpoints:
   GET  /api/auth/me        — get current user (protected)
 """
 import logging
+import os
 from typing import Optional
 
 import httpx
@@ -112,27 +113,56 @@ async def google_auth(req: GoogleAuthRequest, db: AsyncSession = Depends(get_db)
     Verifies the token with Google's tokeninfo endpoint,
     then creates or updates the user.
     """
-    # Verify the Google ID token
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"https://oauth2.googleapis.com/tokeninfo?id_token={req.id_token}"
+    # Verify the Google ID token with Google.
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"https://oauth2.googleapis.com/tokeninfo?id_token={req.id_token}"
+            )
+    except httpx.HTTPError:
+        logger.exception("Google token verification request failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google authentication service unavailable",
         )
 
     if resp.status_code != 200:
+        logger.warning("Google token verification rejected token: status=%s", resp.status_code)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid Google token",
         )
 
-    google_info = resp.json()
+    try:
+        google_info = resp.json()
+    except ValueError:
+        logger.warning("Google token verification returned non-JSON payload")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google token",
+        )
+
     google_id = google_info.get("sub")
     email = google_info.get("email")
     name = google_info.get("name", email.split("@")[0] if email else "User")
+    audience = google_info.get("aud")
 
     if not email or not google_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Could not get user info from Google",
+        )
+
+    expected_client_id = os.getenv("GOOGLE_CLIENT_ID") or os.getenv("VITE_GOOGLE_CLIENT_ID")
+    if expected_client_id and audience != expected_client_id:
+        logger.warning(
+            "Google token audience mismatch: got=%s expected=%s",
+            audience,
+            expected_client_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google token audience",
         )
 
     # Try to find existing user by google_id or email
