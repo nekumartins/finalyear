@@ -70,13 +70,34 @@ async def websocket_debate(websocket: WebSocket):
     await handler.handle()
 
 
+class SPAStaticFiles(StaticFiles):
+    """
+    Static file server with SPA fallback.
+    If a client-side route is missing as a file, serve index.html.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 404:
+            request_path = scope.get("path", "")
+            is_client_route = (
+                scope.get("method") == "GET"
+                and not request_path.startswith("/api")
+                and not request_path.startswith("/ws")
+                and "." not in request_path.rsplit("/", 1)[-1]
+            )
+            if is_client_route:
+                return await super().get_response("index.html", scope)
+        return response
+
+
 # ── Static Frontend (Docker production build) ─────────────
 # In Docker, the Vite build output is copied to /app/static/
 # Serve it as a single-page app (catch-all → index.html)
 STATIC_DIR = Path("/app/static")
 if STATIC_DIR.is_dir():
     logger.info(f"📦 Serving frontend from {STATIC_DIR}")
-    app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+    app.mount("/", SPAStaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 else:
     logger.info("🔧 No static frontend found (running in dev mode)")
 
