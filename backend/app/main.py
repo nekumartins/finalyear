@@ -11,7 +11,8 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Request, WebSocket
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -78,3 +79,25 @@ if STATIC_DIR.is_dir():
     app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 else:
     logger.info("🔧 No static frontend found (running in dev mode)")
+
+
+@app.exception_handler(404)
+async def spa_404_fallback(request: Request, exc):
+    """
+    Serve SPA entrypoint for client-side routes like /auth, /dashboard, /history/:id.
+    Keep API and asset 404s as JSON Not Found.
+    """
+    if STATIC_DIR.is_dir():
+        path = request.url.path
+        is_client_route = (
+            request.method == "GET"
+            and not path.startswith("/api")
+            and not path.startswith("/ws")
+            and "." not in path.rsplit("/", 1)[-1]
+        )
+        if is_client_route:
+            index_file = STATIC_DIR / "index.html"
+            if index_file.is_file():
+                return FileResponse(index_file)
+
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})
