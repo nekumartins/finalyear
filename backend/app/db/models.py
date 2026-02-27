@@ -24,7 +24,7 @@ class User(Base):
     hashed_password = Column(String(255), nullable=True)  # Null for OAuth-only users
     auth_provider = Column(String(20), default="local")   # "local" or "google"
     google_id = Column(String(255), unique=True, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Relationships
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
@@ -39,7 +39,7 @@ class Session(Base):
     mode = Column(Enum("cloud", "edge", name="session_mode"), nullable=False)
     topic = Column(Text, nullable=False)
     user_position = Column(String(10), nullable=False)
-    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     ended_at = Column(DateTime, nullable=True)
 
     # Post-session metrics (populated when session ends)
