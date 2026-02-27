@@ -15,6 +15,7 @@ EXPECTED_COMMIT="${1:-}"
 DOMAIN="${DOMAIN:-debatecoachsa.southafricanorth.cloudapp.azure.com}"
 AUTO_REDEPLOY="${AUTO_REDEPLOY:-0}"
 RESTART_CADDY="${RESTART_CADDY:-0}"
+HEALTH_TIMEOUT_SECS="${HEALTH_TIMEOUT_SECS:-90}"
 COMPOSE_FILE="docker-compose.prod.yml"
 BACKEND_CONTAINER="debate-coach-app"
 
@@ -32,6 +33,51 @@ require_cmd() {
 require_cmd git
 require_cmd docker
 require_cmd curl
+
+wait_for_local_health() {
+  local timeout="$1"
+  local start now
+  start="$(date +%s)"
+  while true; do
+    if curl -fsS --max-time 5 http://localhost:8000/api/health >/dev/null 2>&1; then
+      return 0
+    fi
+    now="$(date +%s)"
+    if (( now - start >= timeout )); then
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+curl_headers_retry() {
+  local url="$1"
+  local out_file="$2"
+  local attempts="${3:-15}"
+  local i
+  for ((i = 1; i <= attempts; i++)); do
+    if curl -sS --max-time 10 -D "${out_file}" -o /dev/null "${url}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+curl_body_and_status_retry() {
+  local url="$1"
+  local body_file="$2"
+  local status_file="$3"
+  local attempts="${4:-15}"
+  local i
+  for ((i = 1; i <= attempts; i++)); do
+    if curl -sS --max-time 10 -o "${body_file}" -w '%{http_code}' "${url}" >"${status_file}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
 
 banner "Step 1: Repo and container version checks"
 CURRENT_COMMIT="$(git rev-parse --short HEAD)"
@@ -59,15 +105,23 @@ docker exec "${BACKEND_CONTAINER}" sh -lc "grep -n 'class SPAStaticFiles' /app/b
 docker exec "${BACKEND_CONTAINER}" sh -lc "ls -l /app/static/index.html"
 
 banner "Step 2: Local backend checks (before Caddy)"
+if ! wait_for_local_health "${HEALTH_TIMEOUT_SECS}"; then
+  echo "ERROR: backend did not become healthy within ${HEALTH_TIMEOUT_SECS}s"
+  docker compose -f "${COMPOSE_FILE}" ps
+  docker logs --tail=120 "${BACKEND_CONTAINER}" || true
+  exit 1
+fi
+
 ROOT_HEADERS="$(mktemp)"
 AUTH_HEADERS="$(mktemp)"
 API_UNKNOWN_BODY="$(mktemp)"
-trap 'rm -f "${ROOT_HEADERS}" "${AUTH_HEADERS}" "${API_UNKNOWN_BODY}"' EXIT
+API_STATUS_FILE="$(mktemp)"
+trap 'rm -f "${ROOT_HEADERS}" "${AUTH_HEADERS}" "${API_UNKNOWN_BODY}" "${API_STATUS_FILE}"' EXIT
 
-curl -sS -D "${ROOT_HEADERS}" -o /dev/null http://localhost:8000/
-curl -sS -D "${AUTH_HEADERS}" -o /dev/null http://localhost:8000/auth
-curl -sS -o "${API_UNKNOWN_BODY}" -w '%{http_code}' http://localhost:8000/api/unknown >/tmp/api_status_code.txt
-API_STATUS="$(cat /tmp/api_status_code.txt)"
+curl_headers_retry "http://localhost:8000/" "${ROOT_HEADERS}" 20
+curl_headers_retry "http://localhost:8000/auth" "${AUTH_HEADERS}" 20
+curl_body_and_status_retry "http://localhost:8000/api/unknown" "${API_UNKNOWN_BODY}" "${API_STATUS_FILE}" 20
+API_STATUS="$(cat "${API_STATUS_FILE}")"
 
 echo "[local /] $(head -n 1 "${ROOT_HEADERS}" | tr -d '\r')"
 echo "[local /auth] $(head -n 1 "${AUTH_HEADERS}" | tr -d '\r')"
@@ -86,11 +140,11 @@ banner "Step 3: Public URL checks via Caddy"
 PUBLIC_ROOT_HEADERS="$(mktemp)"
 PUBLIC_AUTH_HEADERS="$(mktemp)"
 PUBLIC_ME_HEADERS="$(mktemp)"
-trap 'rm -f "${ROOT_HEADERS}" "${AUTH_HEADERS}" "${API_UNKNOWN_BODY}" "${PUBLIC_ROOT_HEADERS}" "${PUBLIC_AUTH_HEADERS}" "${PUBLIC_ME_HEADERS}" /tmp/api_status_code.txt' EXIT
+trap 'rm -f "${ROOT_HEADERS}" "${AUTH_HEADERS}" "${API_UNKNOWN_BODY}" "${API_STATUS_FILE}" "${PUBLIC_ROOT_HEADERS}" "${PUBLIC_AUTH_HEADERS}" "${PUBLIC_ME_HEADERS}"' EXIT
 
-curl -sS -D "${PUBLIC_ROOT_HEADERS}" -o /dev/null "https://${DOMAIN}/"
-curl -sS -D "${PUBLIC_AUTH_HEADERS}" -o /dev/null "https://${DOMAIN}/auth"
-curl -sS -D "${PUBLIC_ME_HEADERS}" -o /dev/null "https://${DOMAIN}/api/auth/me"
+curl_headers_retry "https://${DOMAIN}/" "${PUBLIC_ROOT_HEADERS}" 20
+curl_headers_retry "https://${DOMAIN}/auth" "${PUBLIC_AUTH_HEADERS}" 20
+curl_headers_retry "https://${DOMAIN}/api/auth/me" "${PUBLIC_ME_HEADERS}" 20
 
 echo "[public /] $(head -n 1 "${PUBLIC_ROOT_HEADERS}" | tr -d '\r')"
 echo "[public /auth] $(head -n 1 "${PUBLIC_AUTH_HEADERS}" | tr -d '\r')"
@@ -105,7 +159,7 @@ if [[ "${PUBLIC_AUTH_OK}" -ne 1 && "${RESTART_CADDY}" == "1" ]]; then
   banner "Step 4: Public /auth failed and RESTART_CADDY=1 -> restarting caddy"
   docker restart caddy >/dev/null
   docker exec caddy cat /etc/caddy/Caddyfile | sed -n '1,80p'
-  curl -sS -D "${PUBLIC_AUTH_HEADERS}" -o /dev/null "https://${DOMAIN}/auth"
+  curl_headers_retry "https://${DOMAIN}/auth" "${PUBLIC_AUTH_HEADERS}" 20
   echo "[public /auth after caddy restart] $(head -n 1 "${PUBLIC_AUTH_HEADERS}" | tr -d '\r')"
 fi
 
