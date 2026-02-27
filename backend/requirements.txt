@@ -29,10 +29,10 @@ pytest==8.3.5
 pytest-asyncio==0.25.0
 aiosqlite>=0.20.0
 
-# STT Providers
+# STT Providers (cloud path)
 deepgram-sdk>=3.0
-faster-whisper>=1.0.0
 
 # VAD (Silero — optional but recommended for better EoT accuracy)
-# CPU-only build: ~300MB. GPU build: pip install torch (no index-url)
-torch>=2.0.0 --index-url https://download.pytorch.org/whl/cpu
+# Optional edge/local dependencies (install only when needed):
+# faster-whisper>=1.0.0
+# torch>=2.0.0 --index-url https://download.pytorch.org/whl/cpu

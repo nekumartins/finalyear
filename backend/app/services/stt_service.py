@@ -624,19 +624,8 @@ class LocalSTTService(BatchSTTService):
 # Factory
 # ═══════════════════════════════════════════════════════════════
 
-def get_stt_service(mode: str) -> STTService:
-    """
-    Factory: returns the right STT service based on session mode and config.
-    - Cloud mode: uses the configured provider (deepgram, groq)
-    - Edge mode: uses faster-whisper locally
-    """
-    settings = get_settings()
-
-    if mode == "edge":
-        logger.info("[STT] Creating LocalSTTService (faster-whisper)")
-        return LocalSTTService()
-
-    # Cloud mode — use configured provider
+def _get_cloud_stt_service(settings, *, allow_local_override: bool = True) -> STTService:
+    """Return cloud STT provider (optionally allowing local override)."""
     provider = settings.stt_provider.lower()
 
     if provider == "deepgram":
@@ -646,10 +635,33 @@ def get_stt_service(mode: str) -> STTService:
         logger.info("[STT] Creating DeepgramSTTService (Nova-3 WebSocket Streaming)")
         return DeepgramSTTService()
 
-    if provider == "faster-whisper":
+    if provider == "faster-whisper" and allow_local_override:
         logger.info("[STT] Creating LocalSTTService (faster-whisper, cloud-mode override)")
         return LocalSTTService()
 
     # Default: Groq
     logger.info("[STT] Creating GroqSTTService (Whisper)")
     return GroqSTTService()
+
+
+def get_stt_service(mode: str) -> STTService:
+    """
+    Factory: returns the right STT service based on session mode and config.
+    - Cloud mode: uses configured provider (deepgram/groq)
+    - Edge mode: tries local faster-whisper, falls back to cloud if unavailable
+    """
+    settings = get_settings()
+
+    if mode == "edge":
+        try:
+            logger.info("[STT] Creating LocalSTTService (faster-whisper)")
+            return LocalSTTService()
+        except Exception as e:
+            logger.warning(
+                "[STT] Edge mode unavailable (%s). Falling back to cloud provider '%s'.",
+                e,
+                settings.stt_provider,
+            )
+            return _get_cloud_stt_service(settings, allow_local_override=False)
+
+    return _get_cloud_stt_service(settings)
