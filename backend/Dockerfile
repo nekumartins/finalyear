@@ -14,6 +14,11 @@ WORKDIR /build
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 
+# Pass Google OAuth client ID into the Vite production build.
+# This is required because the frontend is compiled at image build time.
+ARG VITE_GOOGLE_CLIENT_ID=""
+ENV VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID}
+
 # Copy source and build
 COPY web/ ./
 COPY shared/ /shared/
