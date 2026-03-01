@@ -38,6 +38,8 @@ class StartSessionMsg(BaseModel):
     mode: SessionMode = SessionMode.CLOUD
     topic: str = Field(..., min_length=3, max_length=500)
     user_position: str = Field(..., description="User's stance: 'for' or 'against'")
+    tts_provider: str = Field(default="edge-tts", description="TTS provider: edge-tts, gtts, none")
+    tts_voice: str = Field(default="default", description="TTS voice ID")
 
 
 class AudioChunkMsg(BaseModel):
@@ -98,6 +100,15 @@ class TurnSignalMsg(BaseModel):
     session_id: str
     signal: Literal["user_will_yield", "user_speaking", "ai_should_speak"]
     confidence: float = Field(..., ge=0.0, le=1.0)
+
+
+class TtsAudioChunkMsg(BaseModel):
+    """Streamed TTS audio chunk (base64-encoded MP3)."""
+    type: Literal["tts_audio"] = "tts_audio"
+    session_id: str
+    audio_b64: str = Field(..., description="Base64-encoded audio data")
+    content_type: str = "audio/mpeg"
+    is_final: bool = False
 
 
 class SessionMetricsMsg(BaseModel):

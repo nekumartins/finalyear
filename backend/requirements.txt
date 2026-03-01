@@ -32,6 +32,10 @@ aiosqlite>=0.20.0
 # STT Providers (cloud path)
 deepgram-sdk>=3.0
 
+# TTS Providers
+edge-tts>=6.1.0
+gTTS>=2.5.0
+
 # VAD (Silero — optional but recommended for better EoT accuracy)
 # Optional edge/local dependencies (install only when needed):
 # faster-whisper>=1.0.0

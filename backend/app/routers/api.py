@@ -81,6 +81,13 @@ async def test_stt(user: User = Depends(get_current_user)):
         return {"error": str(e)}
 
 
+@router.get("/tts/providers")
+async def list_tts_providers():
+    """Return available TTS providers and their voices."""
+    from backend.app.services.tts_service import get_available_providers
+    return get_available_providers()
+
+
 @router.get("/sessions")
 async def list_sessions(
     limit: int = 20,

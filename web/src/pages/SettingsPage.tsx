@@ -10,11 +10,15 @@ export function SettingsPage() {
     coachingGoal,
     emailUpdates,
     compactMetrics,
+    ttsProvider,
+    ttsVoice,
     setPreferredMode,
     setPreferredPosition,
     setCoachingGoal,
     setEmailUpdates,
     setCompactMetrics,
+    setTtsProvider,
+    setTtsVoice,
     resetOnboarding,
   } = useAppStore();
 
@@ -71,6 +75,85 @@ export function SettingsPage() {
             <option value="structure">Argument Flow</option>
           </select>
         </div>
+      </section>
+
+      <section className="glass" style={styles.panel}>
+        <h2 style={styles.heading}>AI Voice (TTS)</h2>
+        <p style={styles.subtitle}>Choose how the AI debate coach speaks back to you.</p>
+
+        <div style={styles.rowGroup}>
+          <label style={styles.label}>TTS Engine</label>
+          <div style={styles.inlineChoices}>
+            <button
+              style={{ ...styles.pillBtn, ...(ttsProvider === "edge-tts" ? styles.activePill : {}) }}
+              onClick={() => { setTtsProvider("edge-tts"); setTtsVoice("en-US-GuyNeural"); }}
+            >
+              🎙️ Edge TTS
+            </button>
+            <button
+              style={{ ...styles.pillBtn, ...(ttsProvider === "gtts" ? styles.activePill2 : {}) }}
+              onClick={() => { setTtsProvider("gtts"); setTtsVoice("en-us"); }}
+            >
+              🌐 Google TTS
+            </button>
+            <button
+              style={{ ...styles.pillBtn, ...(ttsProvider === "none" ? { border: "1px solid var(--border)", background: "var(--bg-secondary)" } : {}) }}
+              onClick={() => { setTtsProvider("none"); setTtsVoice("silent"); }}
+            >
+              🔇 Off
+            </button>
+          </div>
+        </div>
+
+        {ttsProvider === "edge-tts" && (
+          <div style={styles.rowGroup}>
+            <label style={styles.label}>Voice</label>
+            <select
+              value={ttsVoice}
+              onChange={(e) => setTtsVoice(e.target.value)}
+            >
+              <optgroup label="🇺🇸 US English">
+                <option value="en-US-GuyNeural">Guy (Male)</option>
+                <option value="en-US-DavisNeural">Davis (Male)</option>
+                <option value="en-US-JasonNeural">Jason (Male)</option>
+                <option value="en-US-TonyNeural">Tony (Male)</option>
+                <option value="en-US-JennyNeural">Jenny (Female)</option>
+                <option value="en-US-AriaNeural">Aria (Female)</option>
+                <option value="en-US-SaraNeural">Sara (Female)</option>
+                <option value="en-US-NancyNeural">Nancy (Female)</option>
+              </optgroup>
+              <optgroup label="🇬🇧 UK English">
+                <option value="en-GB-RyanNeural">Ryan (Male)</option>
+                <option value="en-GB-ThomasNeural">Thomas (Male)</option>
+                <option value="en-GB-SoniaNeural">Sonia (Female)</option>
+              </optgroup>
+              <optgroup label="🇦🇺 Australian">
+                <option value="en-AU-WilliamNeural">William (Male)</option>
+                <option value="en-AU-NatashaNeural">Natasha (Female)</option>
+              </optgroup>
+              <optgroup label="🇿🇦 South African">
+                <option value="en-ZA-LukeNeural">Luke (Male)</option>
+                <option value="en-ZA-LeahNeural">Leah (Female)</option>
+              </optgroup>
+            </select>
+          </div>
+        )}
+
+        {ttsProvider === "gtts" && (
+          <div style={styles.rowGroup}>
+            <label style={styles.label}>Accent</label>
+            <select
+              value={ttsVoice}
+              onChange={(e) => setTtsVoice(e.target.value)}
+            >
+              <option value="en-us">English (US)</option>
+              <option value="en-gb">English (UK)</option>
+              <option value="en-au">English (AU)</option>
+              <option value="en-za">English (ZA)</option>
+              <option value="en-in">English (IN)</option>
+            </select>
+          </div>
+        )}
       </section>
 
       <section className="glass" style={styles.panel}>

@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # faster-whisper (local STT) model size: tiny, base, small, medium
     faster_whisper_model: str = "base"
 
+    # TTS provider: "edge-tts" (Microsoft, free, streaming), "gtts" (Google, free), "none"
+    tts_provider: str = "edge-tts"
+    tts_voice: str = "en-US-GuyNeural"
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000

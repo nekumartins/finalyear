@@ -38,12 +38,14 @@ from backend.app.schemas.messages import (
     StartSessionMsg,
     TranscriptEntry,
     TranscriptUpdateMsg,
+    TtsAudioChunkMsg,
     TurnSignalMsg,
 )
 from backend.app.services.latency_tracker import LatencyTracker
 from backend.app.services.llm_service import get_llm_service
 from backend.app.services.metrics_service import metrics_service
 from backend.app.services.stt_service import get_stt_service
+from backend.app.services.tts_service import get_tts_service
 from backend.app.services.turn_taking_service import get_turn_taking_service
 from backend.app.services.auth_service import verify_ws_token
 
@@ -77,6 +79,8 @@ class DebateWebSocketHandler:
         # Services (initialized on session start)
         self.stt_service = None
         self.llm_service = None
+        self.tts_service = None
+        self.tts_voice: str = "default"
         self.turn_taking_service = None
         self.latency = LatencyTracker()
 
@@ -196,6 +200,7 @@ class DebateWebSocketHandler:
                 logger.warning(f"[Shutdown] STT close error: {e}")
         self.stt_service = None
         self.llm_service = None
+        self.tts_service = None
         self.turn_taking_service = None
 
     async def _handle_start_session(self, data: dict) -> None:
@@ -228,6 +233,8 @@ class DebateWebSocketHandler:
         # Initialize services for this session's mode
         self.stt_service = get_stt_service(self.mode)
         self.llm_service = get_llm_service(self.mode)
+        self.tts_service = get_tts_service(msg.tts_provider)
+        self.tts_voice = msg.tts_voice
         self.turn_taking_service = get_turn_taking_service()
         self.latency.reset()
 
@@ -563,6 +570,30 @@ class DebateWebSocketHandler:
                     end_ms=ai_end_ms,
                 ))
 
+            # ── TTS: Synthesize AI response to audio ──
+            if full_response.strip() and self.tts_service:
+                try:
+                    self.latency.record("tts_start")
+                    async for tts_chunk in self.tts_service.synthesize(
+                        full_response.strip(), voice=self.tts_voice
+                    ):
+                        await self._send(TtsAudioChunkMsg(
+                            session_id=self.session_id,
+                            audio_b64=tts_chunk.audio_b64,
+                            content_type=tts_chunk.content_type,
+                            is_final=tts_chunk.is_final,
+                        ))
+                    self.latency.record("tts_done")
+                except Exception as e:
+                    logger.error(f"[TTS] Synthesis failed: {e}")
+                    # Send final marker so client doesn't hang
+                    await self._send(TtsAudioChunkMsg(
+                        session_id=self.session_id,
+                        audio_b64="",
+                        content_type="audio/mpeg",
+                        is_final=True,
+                    ))
+
         except asyncio.CancelledError:
             # Barge-in cancellation — save partial response if any
             logger.info(f"[LLM] Response cancelled after {len(full_response)} chars")
@@ -659,6 +690,7 @@ class DebateWebSocketHandler:
                 logger.warning(f"[Session] STT close error: {e}")
         self.stt_service = None
         self.llm_service = None
+        self.tts_service = None
         self.turn_taking_service = None
         if self._timeout_task is current_task:
             self._timeout_task = None

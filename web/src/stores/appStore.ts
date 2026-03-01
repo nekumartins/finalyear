@@ -3,6 +3,7 @@ import type { SessionMode } from "./debateStore";
 
 type DebatePosition = "for" | "against";
 type CoachingGoal = "confidence" | "speed" | "structure";
+type TTSProvider = "edge-tts" | "gtts" | "none";
 
 interface AppState {
   onboardingCompleted: boolean;
@@ -12,6 +13,8 @@ interface AppState {
   profileName: string;
   emailUpdates: boolean;
   compactMetrics: boolean;
+  ttsProvider: TTSProvider;
+  ttsVoice: string;
   completeOnboarding: (payload: {
     preferredMode: SessionMode;
     preferredPosition: DebatePosition;
@@ -23,6 +26,8 @@ interface AppState {
   setProfileName: (name: string) => void;
   setEmailUpdates: (enabled: boolean) => void;
   setCompactMetrics: (enabled: boolean) => void;
+  setTtsProvider: (provider: TTSProvider) => void;
+  setTtsVoice: (voice: string) => void;
   resetOnboarding: () => void;
 }
 
@@ -37,6 +42,8 @@ type PersistedState = Pick<
   | "profileName"
   | "emailUpdates"
   | "compactMetrics"
+  | "ttsProvider"
+  | "ttsVoice"
 >;
 
 const defaults: PersistedState = {
@@ -47,6 +54,8 @@ const defaults: PersistedState = {
   profileName: "",
   emailUpdates: false,
   compactMetrics: false,
+  ttsProvider: "edge-tts",
+  ttsVoice: "en-US-GuyNeural",
 };
 
 function loadPrefs(): PersistedState {
@@ -78,6 +87,8 @@ function persistedFromState(state: AppState): PersistedState {
     profileName: state.profileName,
     emailUpdates: state.emailUpdates,
     compactMetrics: state.compactMetrics,
+    ttsProvider: state.ttsProvider,
+    ttsVoice: state.ttsVoice,
   };
 }
 
@@ -135,6 +146,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   setCompactMetrics: (compactMetrics) =>
     set((s) => {
       const next = { ...s, compactMetrics };
+      savePrefs(persistedFromState(next));
+      return next;
+    }),
+
+  setTtsProvider: (ttsProvider) =>
+    set((s) => {
+      const next = { ...s, ttsProvider };
+      savePrefs(persistedFromState(next));
+      return next;
+    }),
+
+  setTtsVoice: (ttsVoice) =>
+    set((s) => {
+      const next = { ...s, ttsVoice };
       savePrefs(persistedFromState(next));
       return next;
     }),

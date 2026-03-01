@@ -10,8 +10,10 @@
 import React, { useEffect, useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDebateStore } from "../stores/debateStore";
+import { useAppStore } from "../stores/appStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useAudioCapture } from "../hooks/useAudioCapture";
+import { useAudioPlayback } from "../hooks/useAudioPlayback";
 import { Transcript } from "../components/Transcript";
 import { TurnIndicator } from "../components/TurnIndicator";
 
@@ -52,7 +54,9 @@ function ElapsedTimer({ startTime }: { startTime: number }) {
 export function DebatePage() {
   const navigate = useNavigate();
   const { topic, userPosition, mode, sessionId, status } = useDebateStore();
+  const { ttsProvider, ttsVoice } = useAppStore();
   const { startSession, sendAudioChunk, endSession } = useWebSocket();
+  const { isPlaying: isAiSpeaking, enqueue: enqueueAudio, stop: stopTtsAudio } = useAudioPlayback();
   const [sessionStart] = useState(Date.now());
 
   // Audio chunk callback — sends to backend via WebSocket
@@ -64,17 +68,25 @@ export function DebatePage() {
     [sendAudioChunk]
   );
 
-  const { isRecording, start: startAudio, stop: stopAudio } = useAudioCapture({
+  const { isRecording, start: startAudio, stop: stopMic } = useAudioCapture({
     onChunk: onAudioChunk,
   });
-
+  // Register global TTS audio handler for the WebSocket hook
+  useEffect(() => {
+    (window as any).__ttsAudioHandler = (audioB64: string, isFinal: boolean) => {
+      if (audioB64) enqueueAudio(audioB64);
+    };
+    return () => {
+      delete (window as any).__ttsAudioHandler;
+    };
+  }, [enqueueAudio]);
   // Start session on mount
   useEffect(() => {
     if (!topic) {
       navigate("/new-debate");
       return;
     }
-    startSession(topic, userPosition, mode);
+    startSession(topic, userPosition, mode, ttsProvider, ttsVoice);
   }, []);
 
   // Start audio capture once session is active
@@ -87,16 +99,16 @@ export function DebatePage() {
   // Stop audio capture whenever session is not actively streaming.
   useEffect(() => {
     if (status !== "active" && isRecording) {
-      stopAudio();
+      stopMic();
     }
-  }, [status, isRecording, stopAudio]);
+  }, [status, isRecording, stopMic]);
 
   // Ensure mic resources are always released on page unmount.
   useEffect(() => {
     return () => {
-      stopAudio();
+      stopMic();
     };
-  }, [stopAudio]);
+  }, [stopMic]);
 
   // Navigate to metrics when session ends
   useEffect(() => {
@@ -106,7 +118,8 @@ export function DebatePage() {
   }, [status, navigate]);
 
   const handleEnd = () => {
-    stopAudio();
+    stopMic();
+    stopTtsAudio();
     if (sessionId) endSession(sessionId);
     setTimeout(() => {
       if (useDebateStore.getState().status !== "ended") {
@@ -171,6 +184,17 @@ export function DebatePage() {
         <div style={styles.recordingBanner}>
           <WaveformBars />
           <span style={styles.recordingText}>Recording — speak your argument</span>
+        </div>
+      )}
+
+      {isAiSpeaking && (
+        <div style={styles.aiSpeakingBanner}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round">
+            <path d="M11 5L6 9H2v6h4l5 4V5z" />
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+          </svg>
+          <span style={styles.aiSpeakingText}>AI is speaking…</span>
         </div>
       )}
 
@@ -302,6 +326,22 @@ const styles: Record<string, React.CSSProperties> = {
   recordingText: {
     fontSize: "0.875rem",
     color: "var(--danger)",
+    fontWeight: 600,
+  },
+  aiSpeakingBanner: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    padding: "12px 20px",
+    borderRadius: "var(--radius)",
+    background: "rgba(124,111,239,0.08)",
+    border: "1px solid rgba(124,111,239,0.2)",
+    animation: "fadeSlideUp 0.3s ease",
+    flexShrink: 0,
+  },
+  aiSpeakingText: {
+    fontSize: "0.875rem",
+    color: "var(--accent)",
     fontWeight: 600,
   },
   transcriptArea: {

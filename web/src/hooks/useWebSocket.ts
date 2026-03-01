@@ -206,7 +206,7 @@ export function useWebSocket() {
   // ── Typed send helpers ──
 
   const startSession = useCallback(
-    (topic: string, userPosition: string, mode: "cloud" | "edge") => {
+    (topic: string, userPosition: string, mode: "cloud" | "edge", ttsProvider?: string, ttsVoice?: string) => {
       // Save for reconnection
       lastSessionRef.current = { sessionId: "", topic, userPosition, mode };
 
@@ -223,6 +223,8 @@ export function useWebSocket() {
             topic,
             user_position: userPosition,
             mode,
+            tts_provider: ttsProvider || "edge-tts",
+            tts_voice: ttsVoice || "default",
           });
         } else if (attempts < 50) { // Timeout after ~5s
           attempts++;
@@ -288,6 +290,13 @@ export function useWebSocket() {
           msg.confidence as number
         );
         break;
+
+      case "tts_audio": {
+        // Dispatch to external handler (set by DebatePage)
+        const handler = (window as any).__ttsAudioHandler;
+        if (handler) handler(msg.audio_b64 as string, msg.is_final as boolean);
+        break;
+      }
 
       case "session_metrics":
         setMetrics({
