@@ -11,7 +11,21 @@ permissions:
   contents: read
 
 jobs:
+  # ── Run tests before deploying ──
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run tests
+        run: python -m pytest backend/tests/ -x -k "not edge and not integration" --tb=short
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
@@ -64,13 +78,23 @@ jobs:
 
           cd "$APP_DIR"
           git fetch origin
+
           if git show-ref --verify --quiet "refs/heads/$DEPLOY_BRANCH"; then
             git checkout "$DEPLOY_BRANCH"
           else
             git checkout -b "$DEPLOY_BRANCH" "origin/$DEPLOY_BRANCH"
           fi
-          git pull --ff-only origin "$DEPLOY_BRANCH"
 
+          # Reset to remote state (safe — .env is gitignored, server has no local edits)
+          git reset --hard "origin/$DEPLOY_BRANCH"
+
+          # Rebuild and restart containers
           docker compose -f docker-compose.prod.yml up -d --build
+
+          # Clean up dangling images to save disk space
+          docker image prune -f
+
+          # Show running state
           docker compose -f docker-compose.prod.yml ps
+          echo "Deploy complete: $(git log --oneline -1)"
           EOF
