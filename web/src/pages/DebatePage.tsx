@@ -197,9 +197,10 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    padding: "16px 24px",
-    gap: "16px",
+    padding: "14px 18px",
+    gap: "12px",
     flexShrink: 0,
+    flexWrap: "wrap",
   },
   headerLeft: {
     display: "flex",

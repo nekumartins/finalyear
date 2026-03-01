@@ -400,3 +400,113 @@ select:focus {
   border-color: rgba(251, 191, 36, 0.25);
   color: var(--warning);
 }
+
+/* ── Responsive: Navigation ── */
+.nav-desktop {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.nav-mobile-actions {
+  display: none;
+  align-items: center;
+  gap: 10px;
+}
+
+.hamburger {
+  background: var(--bg-glass);
+  border: 1px solid var(--border) !important;
+  color: var(--text-primary);
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.hamburger:hover {
+  background: var(--bg-glass-hover);
+}
+
+.mobile-menu {
+  display: flex;
+  flex-direction: column;
+  background: rgba(7, 7, 15, 0.97);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 16px 16px;
+  position: sticky;
+  top: 60px;
+  z-index: 190;
+  animation: fadeSlideUp 0.15s ease;
+}
+
+.mobile-menu-link {
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 13px 14px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+  font-family: var(--font);
+}
+
+.mobile-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 8px 0;
+}
+
+.mobile-menu-signout {
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid var(--border) !important;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-family: var(--font);
+}
+
+.mobile-menu-signout:hover {
+  background: var(--bg-glass);
+}
+
+/* ── Responsive breakpoints ── */
+@media (max-width: 640px) {
+  .nav-desktop {
+    display: none !important;
+  }
+
+  .nav-mobile-actions {
+    display: flex !important;
+  }
+
+  .page-main {
+    padding: 20px 16px !important;
+  }
+
+  .metrics-hero-row {
+    flex-direction: column !important;
+  }
+
+  .metrics-hero-row > *:first-child {
+    align-self: center;
+  }
+
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    min-width: 0 !important;
+    width: 100%;
+  }
+}

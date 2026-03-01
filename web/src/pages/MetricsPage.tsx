@@ -104,12 +104,12 @@ export function MetricsPage() {
   return (
     <div style={styles.page}>
       {/* ── Top: score hero + metric grid side by side ── */}
-      <div style={styles.heroRow}>
+      <div style={styles.heroRow} className="metrics-hero-row">
         {/* Ring */}
         <TalkRatioRing ratio={metrics.userTalkRatio} />
 
         {/* Metric cards */}
-        <div style={styles.grid}>
+        <div style={styles.grid} className="metrics-grid">
           <MetricsCard icon="⏱️" label="Duration" value={`${minutes}m ${seconds}s`} />
           <MetricsCard icon="🗣️" label="Your WPM" value={Math.round(metrics.userWpm)} color="var(--success)" />
           <MetricsCard icon="🤖" label="AI WPM" value={Math.round(metrics.aiWpm)} />
@@ -225,9 +225,9 @@ const styles: Record<string, React.CSSProperties> = {
   titleRow: {
     display: "flex",
     justifyContent: "space-between",
-    alignItems: "flex-end",
+    alignItems: "flex-start",
     flexWrap: "wrap",
-    gap: "16px",
+    gap: "12px",
   },
   pageTitle: {
     fontSize: "1.8rem",
@@ -256,6 +256,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     gap: "10px",
     alignItems: "center",
+    flexWrap: "wrap",
   },
   section: {
     padding: "24px",

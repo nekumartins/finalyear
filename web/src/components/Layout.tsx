@@ -1,7 +1,7 @@
 /**
  * Layout — App shell with glassmorphism navigation bar + user menu.
  */
-import { Outlet, NavLink, useNavigate } from "react-router-dom";
+import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import React from "react";
 import { useAuthStore } from "../stores/authStore";
 import { useAppStore } from "../stores/appStore";
@@ -18,6 +18,13 @@ export function Layout() {
   const { user, logout } = useAuthStore();
   const profileName = useAppStore((s) => s.profileName);
   const navigate = useNavigate();
+  const location = useLocation();
+  const [menuOpen, setMenuOpen] = React.useState(false);
+
+  // Close mobile menu on route change
+  React.useEffect(() => {
+    setMenuOpen(false);
+  }, [location.pathname]);
 
   const handleLogout = () => {
     logout();
@@ -47,8 +54,8 @@ export function Layout() {
           <span style={styles.brandText}>Debate Coach</span>
         </div>
 
-        {/* Nav links and user */}
-        <div style={styles.right}>
+        {/* Desktop: nav links and user */}
+        <div style={styles.right} className="nav-desktop">
           <div style={styles.links}>
             {navItems.map((item) => (
               <NavLink
@@ -79,9 +86,52 @@ export function Layout() {
             </div>
           )}
         </div>
+
+        {/* Mobile: avatar + hamburger */}
+        <div className="nav-mobile-actions">
+          {user && <div style={styles.avatar} title={name}>{initials}</div>}
+          <button
+            className="hamburger"
+            onClick={() => setMenuOpen((o) => !o)}
+            aria-label="Toggle menu"
+            aria-expanded={menuOpen}
+          >
+            {menuOpen ? (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            )}
+          </button>
+        </div>
       </nav>
 
-      <main style={styles.main}>
+      {/* Mobile menu drawer */}
+      {menuOpen && (
+        <div className="mobile-menu">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === "/"}
+              className="mobile-menu-link"
+              style={({ isActive }) => ({
+                color: isActive ? "var(--accent)" : "var(--text-primary)",
+                background: isActive ? "rgba(124,111,239,0.1)" : "transparent",
+              })}
+            >
+              {item.label}
+            </NavLink>
+          ))}
+          <div className="mobile-menu-divider" />
+          <button className="mobile-menu-signout" onClick={handleLogout}>Sign out</button>
+        </div>
+      )}
+
+      <main style={styles.main} className="page-main">
         <Outlet />
       </main>
     </div>
@@ -93,8 +143,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "0 32px",
-    height: "64px",
+    padding: "0 24px",
+    height: "60px",
     borderBottom: "1px solid var(--border)",
     background: "rgba(7,7,15,0.8)",
     backdropFilter: "blur(20px)",
@@ -108,6 +158,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "10px",
     textDecoration: "none",
+    flexShrink: 0,
   },
   logoMark: {
     width: 34,
@@ -133,8 +184,6 @@ const styles: Record<string, React.CSSProperties> = {
   links: {
     display: "flex",
     gap: "4px",
-    flexWrap: "wrap",
-    justifyContent: "flex-end",
   },
   link: {
     fontSize: "0.82rem",
@@ -143,6 +192,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "20px",
     transition: "all 0.2s",
     textDecoration: "none",
+    whiteSpace: "nowrap",
   },
   userMenu: {
     display: "flex",
@@ -187,7 +237,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   main: {
     flex: 1,
-    padding: "40px 32px",
+    padding: "32px 32px",
     maxWidth: "1100px",
     margin: "0 auto",
     width: "100%",
