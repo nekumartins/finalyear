@@ -677,8 +677,9 @@ class DebateWebSocketHandler:
                 )
                 db_session = result.scalar_one_or_none()
 
-                started_at = datetime.fromtimestamp(self.session_start_time, tz=timezone.utc)
-                ended_at = datetime.now(timezone.utc)
+                # DB columns are TIMESTAMP WITHOUT TIME ZONE — strip tzinfo
+                started_at = datetime.fromtimestamp(self.session_start_time, tz=timezone.utc).replace(tzinfo=None)
+                ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
                 if db_session is None:
                     db_session = DBSessionModel(
