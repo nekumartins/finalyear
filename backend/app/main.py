@@ -52,17 +52,32 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow frontend to connect (dev: Vite on localhost:5173)
+# CORS — configurable via ALLOWED_ORIGINS env var
+_DEFAULT_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+_allow_all = settings.allowed_origins.strip() == "*"
+if _allow_all:
+    _cors_origins = ["*"]
+    logger.info("🌐 CORS: allowing ALL origins (ALLOWED_ORIGINS=*)")
+else:
+    _extra = [
+        o.strip()
+        for o in settings.allowed_origins.split(",")
+        if o.strip()
+    ]
+    _cors_origins = list(dict.fromkeys(_DEFAULT_ORIGINS + _extra))  # dedupe, preserve order
+    logger.info(f"🌐 CORS origins: {_cors_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:8000",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=not _allow_all,  # credentials incompatible with wildcard origin
     allow_methods=["*"],
     allow_headers=["*"],
 )

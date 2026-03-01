@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # VAD
     vad_threshold: float = 0.5
 
+    # CORS — comma-separated origins, or "*" to allow all
+    allowed_origins: str = ""
+
     # Default mode
     default_mode: str = "cloud"
 
