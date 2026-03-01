@@ -115,6 +115,16 @@ class STTService(ABC):
         """Transcribe a complete audio buffer. Used for post-session."""
         ...
 
+    @property
+    def needs_continuous_audio(self) -> bool:
+        """Whether this provider needs a continuous audio stream (including silence).
+
+        Streaming providers (e.g. Deepgram) rely on seeing silence to trigger
+        endpointing and emit final transcripts.  Batch providers only need
+        speech segments.
+        """
+        return False
+
     async def close(self) -> None:
         """Release provider resources and cancel in-flight work."""
         return
@@ -275,6 +285,12 @@ class DeepgramSTTService(STTService):
 
     DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
 
+    @property
+    def needs_continuous_audio(self) -> bool:
+        """Deepgram streaming needs continuous audio (including silence)
+        so its internal endpointing (300ms silence) can trigger final results."""
+        return True
+
     def __init__(self):
         settings = get_settings()
         self.api_key = settings.deepgram_api_key
@@ -357,6 +373,17 @@ class DeepgramSTTService(STTService):
                                     "is_final": True,
                                 })
                                 logger.info(f"[STT/Deepgram] Final: '{text}'")
+
+                        elif transcript and not is_final:
+                            # Forward interim results for real-time display.
+                            # These are progressive refinements of the current
+                            # utterance ("hel" → "hello" → "hello world") —
+                            # the consumer must replace, not append.
+                            await self._result_queue.put({
+                                "text": transcript,
+                                "is_final": False,
+                            })
+                            logger.debug(f"[STT/Deepgram] Interim: '{transcript}'")
 
                     elif msg_type == "Metadata":
                         logger.debug(f"[STT/Deepgram] Metadata: {data.get('request_id', 'unknown')}")

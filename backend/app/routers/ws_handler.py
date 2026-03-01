@@ -69,6 +69,7 @@ class DebateWebSocketHandler:
         self.transcript: list[TranscriptEntry] = []
         self.session_start_time: float = 0
         self.current_user_text: str = ""
+        self._interim_text: str = ""  # Current Deepgram interim (replaced, not appended)
         self.conversation_history: list[dict] = []
         self._ai_responding: bool = False
         self.user_id: str | None = None  # Set by JWT auth
@@ -220,6 +221,7 @@ class DebateWebSocketHandler:
         self.transcript = []
         self.conversation_history = []
         self.current_user_text = ""
+        self._interim_text = ""
         self._ai_responding = False
         self._barge_in_speech_ms = 0.0
 
@@ -394,41 +396,65 @@ class DebateWebSocketHandler:
         else:
             self._barge_in_speech_ms = 0.0
 
-        # ── 2. Speech-to-Text (non-blocking, VAD-gated) ──
-        # Only feed audio to STT when VAD detects speech.
-        # transcribe_chunk fires a background task and returns immediately.
-        if prediction.is_speech:
+        # ── 2. Speech-to-Text ──
+        # Streaming providers (e.g. Deepgram) need continuous audio INCLUDING
+        # silence so their internal endpointing can trigger final transcripts.
+        # Batch providers (Groq, local whisper) only need speech segments.
+        if prediction.is_speech or self.stt_service.needs_continuous_audio:
             await self.stt_service.transcribe_chunk(audio_bytes)
 
-        # Poll for any completed STT results (from background tasks)
-        stt_result = await self.stt_service.get_result()
+        # Drain ALL available STT results (streaming providers may emit
+        # multiple finals while several chunks were in-flight).
+        while True:
+            stt_result = await self.stt_service.get_result()
+            if not stt_result or not stt_result.get("text"):
+                break
 
-        if stt_result and stt_result.get("text"):
-            self.latency.record("stt_result")
             text = stt_result["text"]
-            self.current_user_text += " " + text
+            is_final = stt_result.get("is_final", False)
 
-            # Send transcript update to client
-            await self._send(TranscriptUpdateMsg(
-                session_id=self.session_id,
-                text=self.current_user_text.strip(),
-                is_final=stt_result.get("is_final", False),
-                speaker="user",
-            ))
+            if is_final:
+                # Final transcript: accumulate permanently and clear interim
+                self.latency.record("stt_result")
+                self.current_user_text += " " + text
+                self._interim_text = ""
+
+                await self._send(TranscriptUpdateMsg(
+                    session_id=self.session_id,
+                    text=self.current_user_text.strip(),
+                    is_final=True,
+                    speaker="user",
+                ))
+            else:
+                # Interim: show accumulated text + current partial as preview.
+                # Deepgram interims replace each other ("hel" → "hello"),
+                # so we overwrite _interim_text rather than appending.
+                self._interim_text = text
+                preview = (self.current_user_text + " " + text).strip()
+
+                await self._send(TranscriptUpdateMsg(
+                    session_id=self.session_id,
+                    text=preview,
+                    is_final=False,
+                    speaker="user",
+                ))
 
         # ── 3. If turn-taking says user is done → trigger AI response ──
-        # Require minimum 2 words to avoid triggering on single-word noise/hallucinations
-        user_words = self.current_user_text.strip().split()
+        # Require minimum 2 words to avoid triggering on single-word noise/hallucinations.
+        # Include interim text: if the user spoke one continuous utterance, Deepgram
+        # may not have emitted a final yet — all the text sits in _interim_text.
+        combined_text = (self.current_user_text + " " + self._interim_text).strip()
+        user_words = combined_text.split()
         has_meaningful_speech = len(user_words) >= 2
         logger.info(
             f"[Pipeline] should_ai_speak={prediction.should_ai_speak} "
-            f"words={len(user_words)} text='{self.current_user_text.strip()[:60]}' "
+            f"words={len(user_words)} text='{combined_text[:60]}' "
             f"ai_responding={self._ai_responding}"
         )
         if prediction.should_ai_speak and has_meaningful_speech and not self._ai_responding:
             # Save user turn to transcript
             now_ms = int((time.time() - self.session_start_time) * 1000)
-            user_text = self.current_user_text.strip()
+            user_text = combined_text
 
             # Flush any remaining audio in STT buffer before AI responds
             flush_result = await self.stt_service.flush()
@@ -447,6 +473,7 @@ class DebateWebSocketHandler:
             # between create_task() and the task's first await, causing garbled output.
             self._ai_responding = True
             self.current_user_text = ""  # Reset so next chunks don't re-trigger
+            self._interim_text = ""      # Clear interim preview
             await self.turn_taking_service.reset()  # Reset speech/silence counters
 
             # Launch AI response as a cancellable task — pass user_text directly
@@ -467,6 +494,7 @@ class DebateWebSocketHandler:
 
         self._ai_responding = False
         self.current_user_text = ""
+        self._interim_text = ""
         self._barge_in_speech_ms = 0.0
 
         # Signal client that AI response was interrupted
@@ -589,6 +617,12 @@ class DebateWebSocketHandler:
             flush_result = await self.stt_service.flush()
             if flush_result and flush_result.get("text"):
                 self.current_user_text += " " + flush_result["text"]
+
+        # Include any pending interim text (user clicked End mid-sentence
+        # before Deepgram emitted a final for the current utterance).
+        if self._interim_text:
+            self.current_user_text += " " + self._interim_text
+            self._interim_text = ""
 
         # Save any unsaved user speech
         if self.current_user_text.strip():
