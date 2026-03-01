@@ -326,6 +326,7 @@ class DeepgramSTTService(STTService):
                     f"&channels=1"
                     f"&punctuate=true"
                     f"&smart_format=true"
+                    f"&interim_results=true"
                     f"&endpointing=300"
                 )
                 url = self.DEEPGRAM_WS_URL + params
@@ -333,6 +334,7 @@ class DeepgramSTTService(STTService):
                 self._ws = await websockets.connect(
                     url,
                     additional_headers={"Authorization": f"Token {self.api_key}"},
+                    open_timeout=30,
                     ping_interval=20,
                     ping_timeout=10,
                     close_timeout=5,
