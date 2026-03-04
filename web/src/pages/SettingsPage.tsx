@@ -194,7 +194,7 @@ export function SettingsPage() {
               </optgroup>
             </select>
             <p style={styles.voiceHint}>
-              Gemini Native Audio — real-time streaming with natural intonation.
+              Gemini 2.5 Flash TTS — high-fidelity speech, 30 natural voices.
             </p>
           </div>
         )}

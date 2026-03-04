@@ -273,7 +273,22 @@ export function useWebSocket() {
         break;
 
       case "transcript_update":
-        setCurrentUserText(msg.text as string);
+        if (msg.is_final) {
+          // Commit the user's finalized turn to the transcript array
+          const finalText = (msg.text as string || "").trim();
+          if (finalText) {
+            const now = Date.now();
+            useDebateStore.getState().appendTranscript({
+              speaker: "user",
+              text: finalText,
+              startMs: now - finalText.length * 20,
+              endMs: now,
+            });
+          }
+          setCurrentUserText("");
+        } else {
+          setCurrentUserText(msg.text as string);
+        }
         break;
 
       case "ai_response_chunk":

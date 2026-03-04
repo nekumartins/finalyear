@@ -14,6 +14,7 @@ import { useCallback, useRef, useState } from "react";
 export function useAudioPlayback() {
   const [isPlaying, setIsPlaying] = useState(false);
   const contextRef = useRef<AudioContext | null>(null);
+  const gainRef = useRef<GainNode | null>(null);
   const queueRef = useRef<ArrayBuffer[]>([]);
   const playingRef = useRef(false);
   const abortRef = useRef(false);
@@ -21,6 +22,11 @@ export function useAudioPlayback() {
   const getContext = useCallback(() => {
     if (!contextRef.current || contextRef.current.state === "closed") {
       contextRef.current = new AudioContext();
+      // Boost volume (2.5x) — Gemini TTS PCM output is quiet on mobile
+      const gain = contextRef.current.createGain();
+      gain.gain.value = 2.5;
+      gain.connect(contextRef.current.destination);
+      gainRef.current = gain;
     }
     return contextRef.current;
   }, []);
@@ -50,7 +56,7 @@ export function useAudioPlayback() {
           }
           const source = ctx.createBufferSource();
           source.buffer = audioBuffer;
-          source.connect(ctx.destination);
+          source.connect(gainRef.current || ctx.destination);
           source.onended = () => resolve();
           source.start();
           // Store ref for potential stop

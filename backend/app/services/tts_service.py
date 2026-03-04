@@ -4,7 +4,7 @@ Service: Text-to-Speech — Multiple provider support.
 Providers:
   1. edge-tts   (Microsoft Edge TTS — FREE, 400+ voices, streaming, high quality)
   2. gTTS       (Google Translate TTS — FREE, simpler, fewer voices, no streaming)
-  3. gemini     (Gemini 2.5 Flash Native Audio — Live API, streaming, 30 voices)
+  3. gemini     (Gemini 2.5 Flash TTS — exact text, 30 voices, API key)
   4. placeholder (silence — for dev/testing)
 
 The ws_handler calls `synthesize(text, voice)` after the LLM finishes
@@ -212,19 +212,18 @@ class GoogleTTSService(TTSService):
         return "gtts"
 
 
-# ── 3. Gemini Native Audio Dialog (Live API, streaming) ──
+# ── 3. Gemini 2.5 Flash TTS (high-quality, exact text) ──
 
 class GeminiTTSService(TTSService):
     """
-    Gemini 2.5 Flash Native Audio via the Live API.
-    - Uses `client.aio.live.connect()` for real-time streaming audio
+    Gemini 2.5 Flash TTS via the `google-genai` SDK.
+    - Pure TTS: reads the exact text given (matches transcript perfectly)
     - 30 named voices with distinct personality traits
-    - Native audio reasoning — natural intonation, emotion, pacing
-    - Streaming PCM output at 24 kHz, wrapped in WAV for browser playback
+    - High-fidelity speech output (24 kHz, 16-bit PCM → WAV)
     - Requires GEMINI_API_KEY
     """
 
-    MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+    MODEL = "gemini-2.5-flash-preview-tts"
 
     VOICES = [
         {"id": "Zephyr", "name": "Zephyr (Bright)", "gender": "Neutral", "locale": "en"},
@@ -261,10 +260,6 @@ class GeminiTTSService(TTSService):
 
     DEFAULT_VOICE = "Kore"
 
-    # Minimum PCM bytes to accumulate before yielding a WAV chunk.
-    # 24000 Hz × 2 bytes × 0.5 s = 24000 bytes (~0.5 s of audio)
-    MIN_PCM_CHUNK = 24_000
-
     async def synthesize(self, text: str, voice: str = "default") -> AsyncIterator[TTSChunk]:
         from google import genai
         from google.genai import types
@@ -282,71 +277,42 @@ class GeminiTTSService(TTSService):
             logger.warning(f"[TTS:Gemini] Unknown voice '{voice_name}', using default")
             voice_name = self.DEFAULT_VOICE
 
-        config = {
-            "response_modalities": ["AUDIO"],
-            "speech_config": {
-                "voice_config": {
-                    "prebuilt_voice_config": {"voice_name": voice_name}
-                }
-            },
-        }
-
         try:
             client = genai.Client(api_key=settings.gemini_api_key)
 
+            config = types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=voice_name,
+                        )
+                    )
+                ),
+            )
+
+            # TTS model is synchronous — run in executor
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=self.MODEL,
+                contents=text,
+                config=config,
+            )
+
+            pcm_data = response.candidates[0].content.parts[0].inline_data.data
+
+            # Split raw PCM into ~32 KB segments, wrap each in a WAV header
+            CHUNK_PCM_SIZE = 32 * 1024
             chunk_count = 0
-            total_pcm = 0
-            pcm_buffer = bytearray()
 
-            async with client.aio.live.connect(
-                model=self.MODEL, config=config
-            ) as session:
-                # Send text as a user turn
-                await session.send_client_content(
-                    turns={"role": "user", "parts": [{"text": text}]},
-                    turn_complete=True,
-                )
-
-                # Receive streaming audio
-                async for response in session.receive():
-                    if response.server_content and response.server_content.model_turn:
-                        for part in response.server_content.model_turn.parts:
-                            if part.inline_data and isinstance(part.inline_data.data, bytes):
-                                pcm_buffer.extend(part.inline_data.data)
-                                total_pcm += len(part.inline_data.data)
-
-                                # Yield WAV chunk when we have enough PCM accumulated
-                                while len(pcm_buffer) >= self.MIN_PCM_CHUNK:
-                                    segment = bytes(pcm_buffer[: self.MIN_PCM_CHUNK])
-                                    del pcm_buffer[: self.MIN_PCM_CHUNK]
-
-                                    wav_buf = io.BytesIO()
-                                    with wave.open(wav_buf, "wb") as wf:
-                                        wf.setnchannels(1)
-                                        wf.setsampwidth(2)
-                                        wf.setframerate(24000)
-                                        wf.writeframes(segment)
-
-                                    chunk_count += 1
-                                    yield TTSChunk(
-                                        audio_b64=base64.b64encode(wav_buf.getvalue()).decode("ascii"),
-                                        content_type="audio/wav",
-                                        sample_rate=24000,
-                                        is_final=False,
-                                    )
-
-                    # Turn complete — flush remaining buffer
-                    if response.server_content and response.server_content.turn_complete:
-                        break
-
-            # Flush any remaining PCM
-            if pcm_buffer:
+            for i in range(0, len(pcm_data), CHUNK_PCM_SIZE):
+                pcm_segment = pcm_data[i : i + CHUNK_PCM_SIZE]
                 wav_buf = io.BytesIO()
                 with wave.open(wav_buf, "wb") as wf:
                     wf.setnchannels(1)
-                    wf.setsampwidth(2)
+                    wf.setsampwidth(2)   # 16-bit
                     wf.setframerate(24000)
-                    wf.writeframes(bytes(pcm_buffer))
+                    wf.writeframes(pcm_segment)
 
                 chunk_count += 1
                 yield TTSChunk(
@@ -364,8 +330,8 @@ class GeminiTTSService(TTSService):
                 is_final=True,
             )
             logger.info(
-                f"[TTS:Gemini] Streamed {chunk_count} WAV chunks "
-                f"({total_pcm} bytes PCM) for {len(text)} chars, voice={voice_name}"
+                f"[TTS:Gemini] Synthesized {chunk_count} WAV chunks "
+                f"({len(pcm_data)} bytes PCM) for {len(text)} chars, voice={voice_name}"
             )
 
         except Exception as e:
