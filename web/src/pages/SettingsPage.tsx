@@ -91,6 +91,12 @@ export function SettingsPage() {
               🎙️ Edge TTS
             </button>
             <button
+              style={{ ...styles.pillBtn, ...(ttsProvider === "gemini" ? styles.geminiPill : {}) }}
+              onClick={() => { setTtsProvider("gemini"); setTtsVoice("Kore"); }}
+            >
+              ✨ Gemini
+            </button>
+            <button
               style={{ ...styles.pillBtn, ...(ttsProvider === "gtts" ? styles.activePill2 : {}) }}
               onClick={() => { setTtsProvider("gtts"); setTtsVoice("en-us"); }}
             >
@@ -136,6 +142,60 @@ export function SettingsPage() {
                 <option value="en-ZA-LeahNeural">Leah (Female)</option>
               </optgroup>
             </select>
+          </div>
+        )}
+
+        {ttsProvider === "gemini" && (
+          <div style={styles.rowGroup}>
+            <label style={styles.label}>Voice</label>
+            <select
+              value={ttsVoice}
+              onChange={(e) => setTtsVoice(e.target.value)}
+            >
+              <optgroup label="🎯 Authoritative">
+                <option value="Kore">Kore — Firm</option>
+                <option value="Orus">Orus — Firm</option>
+                <option value="Alnilam">Alnilam — Firm</option>
+                <option value="Charon">Charon — Informative</option>
+                <option value="Rasalgethi">Rasalgethi — Informative</option>
+                <option value="Sadaltager">Sadaltager — Knowledgeable</option>
+              </optgroup>
+              <optgroup label="☀️ Bright & Upbeat">
+                <option value="Zephyr">Zephyr — Bright</option>
+                <option value="Puck">Puck — Upbeat</option>
+                <option value="Autonoe">Autonoe — Bright</option>
+                <option value="Laomedeia">Laomedeia — Upbeat</option>
+                <option value="Sadachbia">Sadachbia — Lively</option>
+                <option value="Fenrir">Fenrir — Excitable</option>
+              </optgroup>
+              <optgroup label="🌊 Smooth & Gentle">
+                <option value="Algieba">Algieba — Smooth</option>
+                <option value="Despina">Despina — Smooth</option>
+                <option value="Achernar">Achernar — Soft</option>
+                <option value="Vindemiatrix">Vindemiatrix — Gentle</option>
+                <option value="Sulafat">Sulafat — Warm</option>
+                <option value="Achird">Achird — Friendly</option>
+              </optgroup>
+              <optgroup label="🍃 Relaxed & Clear">
+                <option value="Aoede">Aoede — Breezy</option>
+                <option value="Callirrhoe">Callirrhoe — Easy-going</option>
+                <option value="Umbriel">Umbriel — Easy-going</option>
+                <option value="Zubenelgenubi">Zubenelgenubi — Casual</option>
+                <option value="Iapetus">Iapetus — Clear</option>
+                <option value="Erinome">Erinome — Clear</option>
+              </optgroup>
+              <optgroup label="🎭 Character">
+                <option value="Leda">Leda — Youthful</option>
+                <option value="Enceladus">Enceladus — Breathy</option>
+                <option value="Algenib">Algenib — Gravelly</option>
+                <option value="Gacrux">Gacrux — Mature</option>
+                <option value="Schedar">Schedar — Even</option>
+                <option value="Pulcherrima">Pulcherrima — Forward</option>
+              </optgroup>
+            </select>
+            <p style={styles.voiceHint}>
+              Gemini voices are expressive AI voices powered by Google's latest model.
+            </p>
           </div>
         )}
 
@@ -255,6 +315,11 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--accent-2)",
     background: "rgba(91,142,240,0.14)",
   },
+  geminiPill: {
+    border: "1px solid rgba(251,188,5,0.50)",
+    color: "#fbbf24",
+    background: "rgba(251,188,5,0.12)",
+  },
   successPill: {
     border: "1px solid rgba(52,211,153,0.45)",
     color: "var(--success)",
@@ -293,5 +358,10 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-primary)",
     fontSize: "0.8rem",
     fontWeight: 700,
+  },
+  voiceHint: {
+    color: "var(--text-secondary)",
+    fontSize: "0.78rem",
+    marginTop: "2px",
   },
 };

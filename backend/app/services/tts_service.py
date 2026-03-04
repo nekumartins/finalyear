@@ -2,9 +2,10 @@
 Service: Text-to-Speech — Multiple provider support.
 
 Providers:
-  1. edge-tts  (Microsoft Edge TTS — FREE, 400+ voices, streaming, high quality)
-  2. gTTS      (Google Translate TTS — FREE, simpler, fewer voices, no streaming)
-  3. placeholder (silence — for dev/testing)
+  1. edge-tts   (Microsoft Edge TTS — FREE, 400+ voices, streaming, high quality)
+  2. gTTS       (Google Translate TTS — FREE, simpler, fewer voices, no streaming)
+  3. gemini     (Gemini 2.5 Flash TTS — high-quality, 30 expressive voices, API key)
+  4. placeholder (silence — for dev/testing)
 
 The ws_handler calls `synthesize(text, voice)` after the LLM finishes
 and streams base64-encoded audio chunks back to the client.
@@ -13,6 +14,7 @@ import asyncio
 import base64
 import io
 import logging
+import wave
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import AsyncIterator
@@ -210,7 +212,140 @@ class GoogleTTSService(TTSService):
         return "gtts"
 
 
-# ── 3. Placeholder (silence — for dev/testing) ──────────
+# ── 3. Gemini 2.5 Flash TTS (high-quality, expressive) ──
+
+class GeminiTTSService(TTSService):
+    """
+    Google Gemini 2.5 Flash TTS via the `google-genai` SDK.
+    - 30 named voices with distinct personality traits
+    - Natural language style/accent/pace control
+    - High-fidelity speech output (24 kHz, 16-bit PCM → WAV)
+    - Requires GEMINI_API_KEY
+    """
+
+    VOICES = [
+        {"id": "Zephyr", "name": "Zephyr (Bright)", "gender": "Neutral", "locale": "en"},
+        {"id": "Puck", "name": "Puck (Upbeat)", "gender": "Neutral", "locale": "en"},
+        {"id": "Charon", "name": "Charon (Informative)", "gender": "Neutral", "locale": "en"},
+        {"id": "Kore", "name": "Kore (Firm)", "gender": "Neutral", "locale": "en"},
+        {"id": "Fenrir", "name": "Fenrir (Excitable)", "gender": "Neutral", "locale": "en"},
+        {"id": "Leda", "name": "Leda (Youthful)", "gender": "Neutral", "locale": "en"},
+        {"id": "Orus", "name": "Orus (Firm)", "gender": "Neutral", "locale": "en"},
+        {"id": "Aoede", "name": "Aoede (Breezy)", "gender": "Neutral", "locale": "en"},
+        {"id": "Callirrhoe", "name": "Callirrhoe (Easy-going)", "gender": "Neutral", "locale": "en"},
+        {"id": "Autonoe", "name": "Autonoe (Bright)", "gender": "Neutral", "locale": "en"},
+        {"id": "Enceladus", "name": "Enceladus (Breathy)", "gender": "Neutral", "locale": "en"},
+        {"id": "Iapetus", "name": "Iapetus (Clear)", "gender": "Neutral", "locale": "en"},
+        {"id": "Umbriel", "name": "Umbriel (Easy-going)", "gender": "Neutral", "locale": "en"},
+        {"id": "Algieba", "name": "Algieba (Smooth)", "gender": "Neutral", "locale": "en"},
+        {"id": "Despina", "name": "Despina (Smooth)", "gender": "Neutral", "locale": "en"},
+        {"id": "Erinome", "name": "Erinome (Clear)", "gender": "Neutral", "locale": "en"},
+        {"id": "Algenib", "name": "Algenib (Gravelly)", "gender": "Neutral", "locale": "en"},
+        {"id": "Rasalgethi", "name": "Rasalgethi (Informative)", "gender": "Neutral", "locale": "en"},
+        {"id": "Laomedeia", "name": "Laomedeia (Upbeat)", "gender": "Neutral", "locale": "en"},
+        {"id": "Achernar", "name": "Achernar (Soft)", "gender": "Neutral", "locale": "en"},
+        {"id": "Alnilam", "name": "Alnilam (Firm)", "gender": "Neutral", "locale": "en"},
+        {"id": "Schedar", "name": "Schedar (Even)", "gender": "Neutral", "locale": "en"},
+        {"id": "Gacrux", "name": "Gacrux (Mature)", "gender": "Neutral", "locale": "en"},
+        {"id": "Pulcherrima", "name": "Pulcherrima (Forward)", "gender": "Neutral", "locale": "en"},
+        {"id": "Achird", "name": "Achird (Friendly)", "gender": "Neutral", "locale": "en"},
+        {"id": "Zubenelgenubi", "name": "Zubenelgenubi (Casual)", "gender": "Neutral", "locale": "en"},
+        {"id": "Vindemiatrix", "name": "Vindemiatrix (Gentle)", "gender": "Neutral", "locale": "en"},
+        {"id": "Sadachbia", "name": "Sadachbia (Lively)", "gender": "Neutral", "locale": "en"},
+        {"id": "Sadaltager", "name": "Sadaltager (Knowledgeable)", "gender": "Neutral", "locale": "en"},
+        {"id": "Sulafat", "name": "Sulafat (Warm)", "gender": "Neutral", "locale": "en"},
+    ]
+
+    DEFAULT_VOICE = "Kore"
+
+    async def synthesize(self, text: str, voice: str = "default") -> AsyncIterator[TTSChunk]:
+        from google import genai
+        from google.genai import types
+        from backend.app.config import get_settings
+
+        settings = get_settings()
+        if not settings.gemini_api_key:
+            logger.error("[TTS:Gemini] No GEMINI_API_KEY configured")
+            yield TTSChunk(audio_b64="", content_type="audio/wav", sample_rate=24000, is_final=True)
+            return
+
+        voice_name = voice if voice != "default" else self.DEFAULT_VOICE
+        valid_ids = {v["id"] for v in self.VOICES}
+        if voice_name not in valid_ids:
+            logger.warning(f"[TTS:Gemini] Unknown voice '{voice_name}', using default")
+            voice_name = self.DEFAULT_VOICE
+
+        try:
+            client = genai.Client(api_key=settings.gemini_api_key)
+
+            config = types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=voice_name,
+                        )
+                    )
+                ),
+            )
+
+            # API is synchronous — run in executor to avoid blocking the event loop
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-2.5-flash-preview-tts",
+                contents=text,
+                config=config,
+            )
+
+            pcm_data = response.candidates[0].content.parts[0].inline_data.data
+
+            # Split raw PCM into ~32 KB segments, wrap each in a WAV header
+            # so the frontend can decode each chunk independently via decodeAudioData.
+            CHUNK_PCM_SIZE = 32 * 1024  # ~0.68 s of audio per chunk
+            chunk_count = 0
+
+            for i in range(0, len(pcm_data), CHUNK_PCM_SIZE):
+                pcm_segment = pcm_data[i : i + CHUNK_PCM_SIZE]
+                wav_buf = io.BytesIO()
+                with wave.open(wav_buf, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)   # 16-bit
+                    wf.setframerate(24000)
+                    wf.writeframes(pcm_segment)
+
+                chunk_count += 1
+                yield TTSChunk(
+                    audio_b64=base64.b64encode(wav_buf.getvalue()).decode("ascii"),
+                    content_type="audio/wav",
+                    sample_rate=24000,
+                    is_final=False,
+                )
+
+            # Final marker
+            yield TTSChunk(
+                audio_b64="",
+                content_type="audio/wav",
+                sample_rate=24000,
+                is_final=True,
+            )
+            logger.info(
+                f"[TTS:Gemini] Synthesized {chunk_count} WAV chunks "
+                f"({len(pcm_data)} bytes PCM) for {len(text)} chars, voice={voice_name}"
+            )
+
+        except Exception as e:
+            logger.error(f"[TTS:Gemini] Synthesis failed: {e}")
+            yield TTSChunk(audio_b64="", content_type="audio/wav", sample_rate=24000, is_final=True)
+
+    def list_voices(self) -> list[dict]:
+        return self.VOICES
+
+    @property
+    def provider_name(self) -> str:
+        return "gemini"
+
+
+# ── 4. Placeholder (silence — for dev/testing) ──────────
 
 class PlaceholderTTSService(TTSService):
     """Returns silence. Useful for development without a real TTS backend."""
@@ -232,6 +367,7 @@ class PlaceholderTTSService(TTSService):
 _PROVIDERS: dict[str, type[TTSService]] = {
     "edge-tts": EdgeTTSService,
     "gtts": GoogleTTSService,
+    "gemini": GeminiTTSService,
     "placeholder": PlaceholderTTSService,
     "none": PlaceholderTTSService,
 }

@@ -23,13 +23,16 @@ class Settings(BaseSettings):
     # Deepgram API — free at console.deepgram.com ($200 credit)
     deepgram_api_key: str = ""
 
+    # Gemini API — get key at aistudio.google.com/apikey
+    gemini_api_key: str = ""
+
     # STT provider: "deepgram" (streaming), "groq" (batch), "faster-whisper" (local)
     stt_provider: str = "deepgram"
 
     # faster-whisper (local STT) model size: tiny, base, small, medium
     faster_whisper_model: str = "base"
 
-    # TTS provider: "edge-tts" (Microsoft, free, streaming), "gtts" (Google, free), "none"
+    # TTS provider: "edge-tts" (Microsoft, free), "gtts" (Google, free), "gemini" (Gemini Flash), "none"
     tts_provider: str = "edge-tts"
     tts_voice: str = "en-US-GuyNeural"
 
