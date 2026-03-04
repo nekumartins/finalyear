@@ -3,7 +3,7 @@ import type { SessionMode } from "./debateStore";
 
 type DebatePosition = "for" | "against";
 type CoachingGoal = "confidence" | "speed" | "structure";
-type TTSProvider = "edge-tts" | "gtts" | "none";
+type TTSProvider = "edge-tts" | "gemini" | "gtts" | "none";
 
 interface AppState {
   onboardingCompleted: boolean;
