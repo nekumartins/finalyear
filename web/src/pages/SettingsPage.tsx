@@ -194,7 +194,7 @@ export function SettingsPage() {
               </optgroup>
             </select>
             <p style={styles.voiceHint}>
-              Gemini voices are expressive AI voices powered by Google's latest model.
+              Gemini Native Audio — real-time streaming with natural intonation.
             </p>
           </div>
         )}
