@@ -45,7 +45,7 @@ from backend.app.services.latency_tracker import LatencyTracker
 from backend.app.services.llm_service import get_llm_service
 from backend.app.services.metrics_service import metrics_service
 from backend.app.services.stt_service import get_stt_service
-from backend.app.services.tts_service import get_tts_service
+from backend.app.services.tts_service import get_tts_service, GeminiNativeAudioService
 from backend.app.services.turn_taking_service import get_turn_taking_service
 from backend.app.services.auth_service import verify_ws_token
 
@@ -510,6 +510,13 @@ class DebateWebSocketHandler:
             text="",
             is_final=True,
         ))
+        # Also send TTS final so client stops waiting for audio
+        await self._send(TtsAudioChunkMsg(
+            session_id=self.session_id,
+            audio_b64="",
+            content_type="audio/wav",
+            is_final=True,
+        ))
         logger.info("[Barge-in] AI response cancelled — user resumed speaking")
 
     async def _generate_ai_response(self, user_text: str) -> None:
@@ -524,7 +531,6 @@ class DebateWebSocketHandler:
         full_response = ""
         ai_start_ms = int((time.time() - self.session_start_time) * 1000)
         self.latency.record("llm_start")
-        first_token_logged = False
 
         # ── Push user message to history BEFORE the LLM call ──
         # This ensures:
@@ -534,65 +540,132 @@ class DebateWebSocketHandler:
         self.conversation_history.append({"role": "user", "content": user_text})
 
         try:
-            async for token in self.llm_service.generate_response_stream(
-                user_text=user_text,
-                topic=self.topic,
-                user_position=self.user_position,
-                conversation_history=self.conversation_history,
-            ):
-                if not first_token_logged:
-                    self.latency.record("llm_first_token")
-                    first_token_logged = True
-                full_response += token
-                await self._send(AiResponseChunkMsg(
-                    session_id=self.session_id,
-                    text=token,
-                    is_final=False,
-                ))
+            # ── Unified path: Gemini Native Audio (brain + voice in one call) ──
+            if isinstance(self.tts_service, GeminiNativeAudioService):
+                first_token_logged = False
+                self.latency.record("tts_start")
 
-            self.latency.record("llm_done")
+                async for chunk in self.tts_service.generate_debate_response(
+                    user_text=user_text,
+                    topic=self.topic,
+                    user_position=self.user_position,
+                    conversation_history=self.conversation_history,
+                    voice=self.tts_voice,
+                ):
+                    # Transcript text (from output_audio_transcription)
+                    if chunk.text:
+                        if not first_token_logged:
+                            self.latency.record("llm_first_token")
+                            first_token_logged = True
+                        full_response += chunk.text
+                        await self._send(AiResponseChunkMsg(
+                            session_id=self.session_id,
+                            text=chunk.text,
+                            is_final=False,
+                        ))
 
-            # Send final marker
-            await self._send(AiResponseChunkMsg(
-                session_id=self.session_id,
-                text="",
-                is_final=True,
-            ))
-
-            # Save AI turn to history and transcript
-            ai_end_ms = int((time.time() - self.session_start_time) * 1000)
-            if full_response.strip():
-                self.conversation_history.append({"role": "assistant", "content": full_response})
-                self.transcript.append(TranscriptEntry(
-                    speaker="ai",
-                    text=full_response.strip(),
-                    start_ms=ai_start_ms,
-                    end_ms=ai_end_ms,
-                ))
-
-            # ── TTS: Synthesize AI response to audio ──
-            if full_response.strip() and self.tts_service:
-                try:
-                    self.latency.record("tts_start")
-                    async for tts_chunk in self.tts_service.synthesize(
-                        full_response.strip(), voice=self.tts_voice
-                    ):
+                    # Audio data (streamed in parallel with text)
+                    if chunk.audio_b64:
                         await self._send(TtsAudioChunkMsg(
                             session_id=self.session_id,
-                            audio_b64=tts_chunk.audio_b64,
-                            content_type=tts_chunk.content_type,
-                            is_final=tts_chunk.is_final,
+                            audio_b64=chunk.audio_b64,
+                            content_type=chunk.content_type,
+                            is_final=False,
                         ))
-                    self.latency.record("tts_done")
-                except Exception as e:
-                    logger.error(f"[TTS] Synthesis failed: {e}")
-                    # Send final marker so client doesn't hang
-                    await self._send(TtsAudioChunkMsg(
-                        session_id=self.session_id,
-                        audio_b64="",
-                        content_type="audio/mpeg",
-                        is_final=True,
+
+                    if chunk.is_final:
+                        break
+
+                self.latency.record("llm_done")
+                self.latency.record("tts_done")
+
+                # Send final markers for both text and audio streams
+                await self._send(AiResponseChunkMsg(
+                    session_id=self.session_id,
+                    text="",
+                    is_final=True,
+                ))
+                await self._send(TtsAudioChunkMsg(
+                    session_id=self.session_id,
+                    audio_b64="",
+                    content_type="audio/wav",
+                    is_final=True,
+                ))
+
+                # Save AI turn to history and transcript
+                ai_end_ms = int((time.time() - self.session_start_time) * 1000)
+                if full_response.strip():
+                    self.conversation_history.append({"role": "assistant", "content": full_response})
+                    self.transcript.append(TranscriptEntry(
+                        speaker="ai",
+                        text=full_response.strip(),
+                        start_ms=ai_start_ms,
+                        end_ms=ai_end_ms,
                     ))
+
+            # ── Standard path: LLM stream → TTS synthesis (edge-tts, gTTS, etc.) ──
+            else:
+                first_token_logged = False
+
+                async for token in self.llm_service.generate_response_stream(
+                    user_text=user_text,
+                    topic=self.topic,
+                    user_position=self.user_position,
+                    conversation_history=self.conversation_history,
+                ):
+                    if not first_token_logged:
+                        self.latency.record("llm_first_token")
+                        first_token_logged = True
+                    full_response += token
+                    await self._send(AiResponseChunkMsg(
+                        session_id=self.session_id,
+                        text=token,
+                        is_final=False,
+                    ))
+
+                self.latency.record("llm_done")
+
+                # Send final marker
+                await self._send(AiResponseChunkMsg(
+                    session_id=self.session_id,
+                    text="",
+                    is_final=True,
+                ))
+
+                # Save AI turn to history and transcript
+                ai_end_ms = int((time.time() - self.session_start_time) * 1000)
+                if full_response.strip():
+                    self.conversation_history.append({"role": "assistant", "content": full_response})
+                    self.transcript.append(TranscriptEntry(
+                        speaker="ai",
+                        text=full_response.strip(),
+                        start_ms=ai_start_ms,
+                        end_ms=ai_end_ms,
+                    ))
+
+                # ── TTS: Synthesize AI response to audio ──
+                if full_response.strip() and self.tts_service:
+                    try:
+                        self.latency.record("tts_start")
+                        async for tts_chunk in self.tts_service.synthesize(
+                            full_response.strip(), voice=self.tts_voice
+                        ):
+                            await self._send(TtsAudioChunkMsg(
+                                session_id=self.session_id,
+                                audio_b64=tts_chunk.audio_b64,
+                                content_type=tts_chunk.content_type,
+                                is_final=tts_chunk.is_final,
+                            ))
+                        self.latency.record("tts_done")
+                    except Exception as e:
+                        logger.error(f"[TTS] Synthesis failed: {e}")
+                        # Send final marker so client doesn't hang
+                        await self._send(TtsAudioChunkMsg(
+                            session_id=self.session_id,
+                            audio_b64="",
+                            content_type="audio/mpeg",
+                            is_final=True,
+                        ))
 
         except asyncio.CancelledError:
             # Barge-in cancellation — save partial response if any

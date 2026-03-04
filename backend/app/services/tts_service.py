@@ -4,11 +4,14 @@ Service: Text-to-Speech — Multiple provider support.
 Providers:
   1. edge-tts   (Microsoft Edge TTS — FREE, 400+ voices, streaming, high quality)
   2. gTTS       (Google Translate TTS — FREE, simpler, fewer voices, no streaming)
-  3. gemini     (Gemini 2.5 Flash TTS — exact text, 30 voices, API key)
+  3. gemini     (Gemini Native Audio — unified brain + voice via Live API)
   4. placeholder (silence — for dev/testing)
 
-The ws_handler calls `synthesize(text, voice)` after the LLM finishes
-and streams base64-encoded audio chunks back to the client.
+For edge-tts / gTTS / placeholder, ws_handler calls `synthesize(text, voice)`
+after the LLM finishes.
+
+For gemini, ws_handler calls `generate_debate_response()` which does LLM + TTS
+in a single Live API session (the model generates AND speaks the response).
 """
 import asyncio
 import base64
@@ -31,6 +34,16 @@ class TTSChunk:
     content_type: str           # "audio/mpeg" or "audio/pcm"
     sample_rate: int = 24000    # Hz
     is_final: bool = False      # True for the last chunk
+
+
+@dataclass
+class DebateResponseChunk:
+    """A chunk from the unified Gemini Native Audio pipeline (text and/or audio)."""
+    text: str = ""              # Transcript fragment (from output_audio_transcription)
+    audio_b64: str = ""         # Base64-encoded WAV audio
+    content_type: str = "audio/wav"
+    sample_rate: int = 24000
+    is_final: bool = False
 
 
 # ── Abstract interface ──────────────────────────────────
@@ -212,18 +225,24 @@ class GoogleTTSService(TTSService):
         return "gtts"
 
 
-# ── 3. Gemini 2.5 Flash TTS (high-quality, exact text) ──
+# ── 3. Gemini Native Audio (unified brain + voice) ──────
 
-class GeminiTTSService(TTSService):
+class GeminiNativeAudioService(TTSService):
     """
-    Gemini 2.5 Flash TTS via the `google-genai` SDK.
-    - Pure TTS: reads the exact text given (matches transcript perfectly)
+    Gemini Native Audio via the Live API — unified brain + voice.
+
+    The model generates the debate counter-argument AND speaks it in a
+    single Live API session.  Text transcript comes from
+    output_audio_transcription.
+
+    - Zero rate limits on free tier
+    - Single API call = lower latency
+    - Perfect text↔audio sync
     - 30 named voices with distinct personality traits
-    - High-fidelity speech output (24 kHz, 16-bit PCM → WAV)
     - Requires GEMINI_API_KEY
     """
 
-    MODEL = "gemini-2.5-flash-preview-tts"
+    MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 
     VOICES = [
         {"id": "Zephyr", "name": "Zephyr (Bright)", "gender": "Neutral", "locale": "en"},
@@ -260,27 +279,56 @@ class GeminiTTSService(TTSService):
 
     DEFAULT_VOICE = "Kore"
 
-    async def synthesize(self, text: str, voice: str = "default") -> AsyncIterator[TTSChunk]:
+    async def generate_debate_response(
+        self,
+        user_text: str,
+        topic: str,
+        user_position: str,
+        conversation_history: list[dict],
+        voice: str = "default",
+    ) -> AsyncIterator[DebateResponseChunk]:
+        """
+        Unified generation: model thinks + speaks in one Live API session.
+        Yields DebateResponseChunk with interleaved text and audio.
+        """
         from google import genai
         from google.genai import types
         from backend.app.config import get_settings
+        from backend.app.services.llm_service import DEBATE_SYSTEM_PROMPT, truncate_history
 
         settings = get_settings()
         if not settings.gemini_api_key:
-            logger.error("[TTS:Gemini] No GEMINI_API_KEY configured")
-            yield TTSChunk(audio_b64="", content_type="audio/wav", sample_rate=24000, is_final=True)
+            logger.error("[NativeAudio] No GEMINI_API_KEY configured")
+            yield DebateResponseChunk(is_final=True)
             return
 
         voice_name = voice if voice != "default" else self.DEFAULT_VOICE
         valid_ids = {v["id"] for v in self.VOICES}
         if voice_name not in valid_ids:
-            logger.warning(f"[TTS:Gemini] Unknown voice '{voice_name}', using default")
+            logger.warning(f"[NativeAudio] Unknown voice '{voice_name}', using default")
             voice_name = self.DEFAULT_VOICE
+
+        system_prompt = DEBATE_SYSTEM_PROMPT.format(
+            topic=topic, position=user_position,
+        )
+
+        # Convert OpenAI-format history to Live API turns
+        trimmed = truncate_history(conversation_history)
+        if not trimmed or trimmed[-1].get("content") != user_text:
+            trimmed = [*trimmed, {"role": "user", "content": user_text}]
+
+        turns = []
+        for msg in trimmed:
+            role = "model" if msg["role"] == "assistant" else "user"
+            turns.append(types.Content(
+                role=role,
+                parts=[types.Part(text=msg["content"])],
+            ))
 
         try:
             client = genai.Client(api_key=settings.gemini_api_key)
 
-            config = types.GenerateContentConfig(
+            config = types.LiveConnectConfig(
                 response_modalities=["AUDIO"],
                 speech_config=types.SpeechConfig(
                     voice_config=types.VoiceConfig(
@@ -289,54 +337,84 @@ class GeminiTTSService(TTSService):
                         )
                     )
                 ),
+                system_instruction=types.Content(
+                    parts=[types.Part(text=system_prompt)],
+                ),
+                output_audio_transcription=types.AudioTranscriptionConfig(),
             )
 
-            # TTS model is synchronous — run in executor
-            response = await asyncio.to_thread(
-                client.models.generate_content,
+            async with client.aio.live.connect(
                 model=self.MODEL,
-                contents=text,
                 config=config,
-            )
-
-            pcm_data = response.candidates[0].content.parts[0].inline_data.data
-
-            # Split raw PCM into ~32 KB segments, wrap each in a WAV header
-            CHUNK_PCM_SIZE = 32 * 1024
-            chunk_count = 0
-
-            for i in range(0, len(pcm_data), CHUNK_PCM_SIZE):
-                pcm_segment = pcm_data[i : i + CHUNK_PCM_SIZE]
-                wav_buf = io.BytesIO()
-                with wave.open(wav_buf, "wb") as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)   # 16-bit
-                    wf.setframerate(24000)
-                    wf.writeframes(pcm_segment)
-
-                chunk_count += 1
-                yield TTSChunk(
-                    audio_b64=base64.b64encode(wav_buf.getvalue()).decode("ascii"),
-                    content_type="audio/wav",
-                    sample_rate=24000,
-                    is_final=False,
+            ) as session:
+                # Send conversation history (current user turn is the last entry)
+                await session.send_client_content(
+                    turns=turns,
+                    turn_complete=True,
                 )
 
+                # Receive interleaved audio + transcription
+                chunk_count = 0
+                async for response in session.receive():
+                    # Audio data (raw PCM from the model)
+                    if response.data:
+                        wav_buf = io.BytesIO()
+                        with wave.open(wav_buf, "wb") as wf:
+                            wf.setnchannels(1)
+                            wf.setsampwidth(2)   # 16-bit
+                            wf.setframerate(24000)
+                            wf.writeframes(response.data)
+
+                        chunk_count += 1
+                        yield DebateResponseChunk(
+                            audio_b64=base64.b64encode(wav_buf.getvalue()).decode("ascii"),
+                            content_type="audio/wav",
+                            sample_rate=24000,
+                        )
+
+                    # Transcription text (from output_audio_transcription)
+                    sc = response.server_content
+                    if sc:
+                        ot = getattr(sc, "output_transcription", None)
+                        if ot and getattr(ot, "text", ""):
+                            yield DebateResponseChunk(text=ot.text)
+
+                        if getattr(sc, "turn_complete", False):
+                            break
+
             # Final marker
-            yield TTSChunk(
-                audio_b64="",
-                content_type="audio/wav",
-                sample_rate=24000,
-                is_final=True,
-            )
+            yield DebateResponseChunk(is_final=True)
             logger.info(
-                f"[TTS:Gemini] Synthesized {chunk_count} WAV chunks "
-                f"({len(pcm_data)} bytes PCM) for {len(text)} chars, voice={voice_name}"
+                f"[NativeAudio] Streamed {chunk_count} audio chunks, voice={voice_name}"
             )
 
         except Exception as e:
-            logger.error(f"[TTS:Gemini] Synthesis failed: {e}")
-            yield TTSChunk(audio_b64="", content_type="audio/wav", sample_rate=24000, is_final=True)
+            logger.error(f"[NativeAudio] Generation failed: {e}")
+            yield DebateResponseChunk(is_final=True)
+
+    async def synthesize(self, text: str, voice: str = "default") -> AsyncIterator[TTSChunk]:
+        """Fallback TTS-only path — wraps text in a generate call."""
+        async for chunk in self.generate_debate_response(
+            user_text=text,
+            topic="reading",
+            user_position="neutral",
+            conversation_history=[{"role": "user", "content": text}],
+            voice=voice,
+        ):
+            if chunk.audio_b64:
+                yield TTSChunk(
+                    audio_b64=chunk.audio_b64,
+                    content_type=chunk.content_type,
+                    sample_rate=chunk.sample_rate,
+                    is_final=False,
+                )
+            if chunk.is_final:
+                yield TTSChunk(
+                    audio_b64="",
+                    content_type="audio/wav",
+                    sample_rate=24000,
+                    is_final=True,
+                )
 
     def list_voices(self) -> list[dict]:
         return self.VOICES
@@ -368,7 +446,7 @@ class PlaceholderTTSService(TTSService):
 _PROVIDERS: dict[str, type[TTSService]] = {
     "edge-tts": EdgeTTSService,
     "gtts": GoogleTTSService,
-    "gemini": GeminiTTSService,
+    "gemini": GeminiNativeAudioService,
     "placeholder": PlaceholderTTSService,
     "none": PlaceholderTTSService,
 }
