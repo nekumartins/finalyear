@@ -5,6 +5,7 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { GoogleLogin } from "@react-oauth/google";
 import { useAuthStore } from "../stores/authStore";
+import { ConstellationBg } from "../components/ConstellationBg";
 
 type AuthTab = "login" | "register";
 
@@ -45,6 +46,8 @@ export function AuthPage() {
 
     return (
         <div style={styles.page}>
+            <ConstellationBg />
+
             <div style={styles.container}>
                 {/* Header */}
                 <div style={styles.header}>

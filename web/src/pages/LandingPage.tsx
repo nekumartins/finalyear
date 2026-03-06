@@ -2,111 +2,11 @@
  * LandingPage — Public marketing page for unauthenticated visitors.
  * Constellation-style animated background, hero, features, social proof, CTA.
  */
-import React, { useEffect, useRef } from "react";
+import React, { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
-
-/* ── Constellation Canvas ── */
-function ConstellationBg() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    let raf: number;
-    let stars: { x: number; y: number; vx: number; vy: number; r: number; pulse: number; speed: number }[] = [];
-    const STAR_COUNT = 90;
-    const CONNECT_DIST = 140;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resize();
-
-    const seed = () => {
-      stars = Array.from({ length: STAR_COUNT }, () => ({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
-        vx: (Math.random() - 0.5) * 0.15,
-        vy: (Math.random() - 0.5) * 0.15,
-        r: Math.random() * 1.5 + 0.5,
-        pulse: Math.random() * Math.PI * 2,
-        speed: Math.random() * 0.008 + 0.004,
-      }));
-    };
-    seed();
-
-    const isLight = () => document.documentElement.getAttribute("data-theme") === "light";
-
-    const draw = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const light = isLight();
-      const dotColor = light ? "rgba(108,92,231," : "rgba(160,150,255,";
-      const lineColor = light ? "rgba(108,92,231," : "rgba(124,111,239,";
-
-      const time = Date.now();
-
-      for (const s of stars) {
-        s.x += s.vx;
-        s.y += s.vy;
-        if (s.x < 0) s.x = canvas.width;
-        if (s.x > canvas.width) s.x = 0;
-        if (s.y < 0) s.y = canvas.height;
-        if (s.y > canvas.height) s.y = 0;
-        s.pulse += s.speed;
-      }
-
-      // Lines
-      for (let i = 0; i < stars.length; i++) {
-        for (let j = i + 1; j < stars.length; j++) {
-          const dx = stars[i].x - stars[j].x;
-          const dy = stars[i].y - stars[j].y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < CONNECT_DIST) {
-            const alpha = (1 - dist / CONNECT_DIST) * 0.12;
-            ctx.strokeStyle = `${lineColor}${alpha})`;
-            ctx.lineWidth = 0.5;
-            ctx.beginPath();
-            ctx.moveTo(stars[i].x, stars[i].y);
-            ctx.lineTo(stars[j].x, stars[j].y);
-            ctx.stroke();
-          }
-        }
-      }
-
-      // Dots
-      for (const s of stars) {
-        const glow = 0.25 + Math.sin(s.pulse) * 0.15;
-        ctx.fillStyle = `${dotColor}${glow})`;
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      raf = requestAnimationFrame(draw);
-    };
-
-    draw();
-    window.addEventListener("resize", () => { resize(); seed(); });
-    return () => { cancelAnimationFrame(raf); window.removeEventListener("resize", resize); };
-  }, []);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 0,
-        pointerEvents: "none",
-      }}
-    />
-  );
-}
+import { useAppStore } from "../stores/appStore";
+import { ConstellationBg } from "../components/ConstellationBg";
 
 /* ── Feature Card ── */
 function FeatureCard({ icon, title, desc }: { icon: string; title: string; desc: string }) {
@@ -133,6 +33,7 @@ function StatPill({ value, label }: { value: string; label: string }) {
 export function LandingPage() {
   const navigate = useNavigate();
   const { isAuthenticated, checkAuth } = useAuthStore();
+  const { theme, setTheme } = useAppStore();
 
   useEffect(() => {
     checkAuth();
@@ -158,6 +59,13 @@ export function LandingPage() {
           <span style={styles.brandText}>Debate Coach</span>
         </div>
         <div style={styles.navActions}>
+          <button
+            style={styles.themeToggle}
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            title="Toggle theme"
+          >
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
           <button style={styles.navLink} onClick={() => navigate("/auth")}>Sign in</button>
           <button className="btn-primary" style={styles.navCta} onClick={() => navigate("/auth")}>Get Started</button>
         </div>
@@ -332,6 +240,18 @@ const styles: Record<string, React.CSSProperties> = {
   navCta: {
     padding: "8px 20px",
     fontSize: "0.85rem",
+  },
+  themeToggle: {
+    background: "none",
+    border: "none",
+    fontSize: "1.2rem",
+    cursor: "pointer",
+    padding: "8px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    opacity: 0.8,
+    transition: "opacity 0.2s",
   },
 
   /* Hero */

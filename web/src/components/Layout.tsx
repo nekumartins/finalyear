@@ -5,6 +5,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import React from "react";
 import { useAuthStore } from "../stores/authStore";
 import { useAppStore, type Theme } from "../stores/appStore";
+import { ConstellationBg } from "./ConstellationBg";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard" },
@@ -52,6 +53,8 @@ export function Layout() {
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+      <ConstellationBg />
+      
       <nav style={styles.nav}>
         {/* Brand */}
         <div style={styles.brand}>
