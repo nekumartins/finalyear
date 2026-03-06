@@ -110,6 +110,11 @@ async def list_sessions(
             "started_at": s.started_at.isoformat() if s.started_at else None,
             "duration_seconds": s.duration_seconds,
             "user_wpm": s.user_wpm,
+            "overall_score": (
+                s.coaching_report.get("overall_score")
+                if isinstance(s.coaching_report, dict)
+                else None
+            ),
         }
         for s in sessions
     ]

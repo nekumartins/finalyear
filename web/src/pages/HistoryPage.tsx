@@ -11,6 +11,22 @@ interface SessionSummary {
   started_at: string | null;
   duration_seconds: number | null;
   user_wpm: number | null;
+  overall_score: number | null;
+}
+
+function ScoreBadge({ score }: { score: number }) {
+  const color = score >= 75 ? "var(--success)" : score >= 50 ? "var(--warning)" : "var(--danger)";
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", justifyContent: "center",
+      width: 32, height: 32, borderRadius: "50%",
+      background: `color-mix(in srgb, ${color} 15%, transparent)`,
+      border: `2px solid ${color}`,
+      fontSize: "0.72rem", fontWeight: 800, color, flexShrink: 0,
+    }}>
+      {score}
+    </span>
+  );
 }
 
 function formatDate(iso: string) {
@@ -109,9 +125,10 @@ export function HistoryPage() {
               style={{ animationDelay: `${idx * 0.06}s` }}
               onClick={() => navigate(`/history/${s.id}`)}
             >
-              {/* Top row: index + topic */}
+              {/* Top row: index + score + topic */}
               <div className="history-card-top">
                 <div style={styles.cardIndex}>#{idx + 1}</div>
+                {s.overall_score != null && <ScoreBadge score={s.overall_score} />}
                 <h3 className="history-card-topic">{s.topic}</h3>
                 <svg
                   style={styles.chevron}

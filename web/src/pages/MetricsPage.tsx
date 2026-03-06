@@ -260,6 +260,59 @@ const coachStyles: Record<string, React.CSSProperties> = {
   },
 };
 
+/** Post-session emotional moment */
+function SessionHero({ score, topic }: { score: number | null; topic: string }) {
+  if (score == null) return null;
+  const topicSnippet = topic.length > 40 ? topic.slice(0, 40) + "…" : topic;
+
+  if (score >= 80) {
+    return (
+      <div className="glass metrics-hero-moment" style={{
+        padding: "28px 24px", textAlign: "center", position: "relative", overflow: "hidden",
+        background: "linear-gradient(135deg, rgba(52,211,153,0.08) 0%, rgba(124,111,239,0.08) 100%)",
+        border: "1px solid rgba(52,211,153,0.25)",
+      }}>
+        <div className="confetti-burst" />
+        <div style={{ fontSize: "2.5rem", marginBottom: 8 }}>🎉</div>
+        <h2 style={{ fontSize: "1.4rem", fontWeight: 800, marginBottom: 6 }}>Outstanding Performance!</h2>
+        <p style={{ color: "var(--text-secondary)", fontSize: "0.92rem", lineHeight: 1.5 }}>
+          You scored <strong style={{ color: "var(--success)" }}>{score}</strong> on "{topicSnippet}" — you're crushing it.
+        </p>
+      </div>
+    );
+  }
+
+  if (score >= 50) {
+    return (
+      <div className="glass metrics-hero-moment" style={{
+        padding: "28px 24px", textAlign: "center",
+        background: "linear-gradient(135deg, rgba(124,111,239,0.08) 0%, rgba(91,142,240,0.08) 100%)",
+        border: "1px solid rgba(124,111,239,0.25)",
+      }}>
+        <div style={{ fontSize: "2.5rem", marginBottom: 8 }}>📈</div>
+        <h2 style={{ fontSize: "1.4rem", fontWeight: 800, marginBottom: 6 }}>Solid Progress</h2>
+        <p style={{ color: "var(--text-secondary)", fontSize: "0.92rem", lineHeight: 1.5 }}>
+          You scored <strong style={{ color: "var(--accent)" }}>{score}</strong> on "{topicSnippet}" — every session builds your edge.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="glass metrics-hero-moment" style={{
+      padding: "28px 24px", textAlign: "center",
+      background: "linear-gradient(135deg, rgba(251,191,36,0.06) 0%, rgba(248,113,113,0.06) 100%)",
+      border: "1px solid rgba(251,191,36,0.2)",
+    }}>
+      <div style={{ fontSize: "2.5rem", marginBottom: 8 }}>💪</div>
+      <h2 style={{ fontSize: "1.4rem", fontWeight: 800, marginBottom: 6 }}>Tough Round — Keep Going</h2>
+      <p style={{ color: "var(--text-secondary)", fontSize: "0.92rem", lineHeight: 1.5 }}>
+        You scored <strong style={{ color: "var(--warning)" }}>{score}</strong> on "{topicSnippet}" — the best debaters learn the most from hard rounds.
+      </p>
+    </div>
+  );
+}
+
 export function MetricsPage() {
   const navigate = useNavigate();
   const { metrics, topic, transcript } = useDebateStore();
@@ -282,6 +335,9 @@ export function MetricsPage() {
 
   return (
     <div style={styles.page}>
+      {/* ── Emotional moment ── */}
+      <SessionHero score={metrics.coachingReport?.overall_score ?? null} topic={topic} />
+
       {/* ── Top: score hero + metric grid side by side ── */}
       <div style={styles.heroRow} className="metrics-hero-row">
         {/* Ring */}
