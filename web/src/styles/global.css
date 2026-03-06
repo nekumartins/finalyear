@@ -629,3 +629,58 @@ select:focus {
     max-width: 82%;
   }
 }
+
+/* ── History card layout ───────────────────────── */
+.history-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+  animation: fadeSlideUp 0.35s ease both;
+  position: relative;
+}
+
+.history-card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.history-card-topic {
+  font-size: 0.95rem;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  letter-spacing: -0.01em;
+  /* allow up to 2 lines before truncating */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+}
+
+.history-card-bottom {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Dashboard session row fix: inherit theme text color */
+.dashboard-session-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-glass);
+  padding: 12px 14px;
+  text-align: left;
+  color: var(--text-primary);
+  width: 100%;
+  cursor: pointer;
+}

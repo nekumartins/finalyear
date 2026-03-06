@@ -105,14 +105,33 @@ export function HistoryPage() {
           {sessions.map((s, idx) => (
             <div
               key={s.id}
-              className="glass"
-              style={{ ...styles.card, animationDelay: `${idx * 0.06}s` }}
+              className="glass history-card"
+              style={{ animationDelay: `${idx * 0.06}s` }}
               onClick={() => navigate(`/history/${s.id}`)}
             >
-              {/* Top row */}
-              <div style={styles.cardTop}>
+              {/* Top row: index + topic */}
+              <div className="history-card-top">
                 <div style={styles.cardIndex}>#{idx + 1}</div>
-                <h3 style={styles.cardTopic}>{s.topic}</h3>
+                <h3 className="history-card-topic">{s.topic}</h3>
+                <svg
+                  style={styles.chevron}
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <path
+                    d="M9 6l6 6-6 6"
+                    stroke="var(--text-muted)"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </div>
+
+              {/* Bottom row: mode badge + meta */}
+              <div className="history-card-bottom">
                 <span
                   style={{
                     ...styles.modeBadge,
@@ -130,10 +149,6 @@ export function HistoryPage() {
                 >
                   {s.mode === "cloud" ? "☁️ Cloud" : "⚡ Edge"}
                 </span>
-              </div>
-
-              {/* Meta row */}
-              <div style={styles.cardMeta}>
                 {s.started_at && (
                   <span style={styles.metaItem}>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" style={{ verticalAlign: "middle", marginRight: 4 }}>
@@ -162,23 +177,6 @@ export function HistoryPage() {
                   </span>
                 )}
               </div>
-
-              {/* Chevron */}
-              <svg
-                style={styles.chevron}
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-              >
-                <path
-                  d="M9 6l6 6-6 6"
-                  stroke="var(--text-muted)"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
             </div>
           ))}
         </div>
@@ -231,39 +229,11 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "12px",
   },
-  card: {
-    display: "flex",
-    alignItems: "center",
-    gap: "16px",
-    padding: "18px 22px",
-    cursor: "pointer",
-    transition: "transform 0.2s, box-shadow 0.2s, border-color 0.2s",
-    animation: "fadeSlideUp 0.35s ease both",
-    position: "relative",
-  },
-  cardTop: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-    flex: 1,
-    flexWrap: "wrap",
-    minWidth: 0,
-  },
   cardIndex: {
     fontSize: "0.75rem",
     color: "var(--text-muted)",
     fontWeight: 700,
     minWidth: "26px",
-  },
-  cardTopic: {
-    fontSize: "0.95rem",
-    fontWeight: 600,
-    flex: 1,
-    minWidth: 0,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    letterSpacing: "-0.01em",
   },
   modeBadge: {
     fontSize: "0.72rem",
@@ -272,12 +242,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "20px",
     flexShrink: 0,
     whiteSpace: "nowrap",
-  },
-  cardMeta: {
-    display: "flex",
-    gap: "16px",
-    flexShrink: 0,
-    flexWrap: "wrap",
   },
   metaItem: {
     fontSize: "0.78rem",

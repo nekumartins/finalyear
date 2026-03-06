@@ -98,7 +98,7 @@ export function DashboardPage() {
         ) : (
           <div style={styles.sessionList}>
             {sessions.slice(0, 6).map((s) => (
-              <button key={s.id} style={styles.sessionRow} onClick={() => navigate(`/history/${s.id}`)}>
+              <button key={s.id} className="dashboard-session-row" onClick={() => navigate(`/history/${s.id}`)}>
                 <div style={styles.sessionInfo}>
                   <strong style={styles.sessionTopic}>{s.topic}</strong>
                   <span style={styles.sessionMeta}>
