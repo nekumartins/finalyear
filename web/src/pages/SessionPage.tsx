@@ -28,8 +28,8 @@ export function SessionPage() {
     }
 
     return (
-        <div style={styles.page}>
-            <div style={styles.header}>
+        <div className="session-page">
+            <div className="session-header">
                 <button style={styles.backBtn} onClick={() => navigate("/history")}>
                     ← Back
                 </button>
@@ -42,15 +42,15 @@ export function SessionPage() {
                 </div>
             </div>
 
-            <div style={styles.content}>
-                <div style={styles.main}>
+            <div className="session-content">
+                <div className="session-main">
                     <Transcript />
                 </div>
 
-                <div style={styles.sidebar}>
+                <div className="session-sidebar">
                     <h3>Session Metrics</h3>
                     {metrics ? (
-                        <div style={styles.metricsGrid}>
+                        <div className="session-metrics-grid">
                             <MetricItem label="Duration" value={`${Math.round(metrics.durationSeconds)}s`} />
                             <MetricItem label="Your Speed" value={`${Math.round(metrics.userWpm)} WPM`} />
                             <MetricItem label="AI Speed" value={`${Math.round(metrics.aiWpm)} WPM`} />
@@ -106,12 +106,6 @@ function MetricItem({ label, value }: { label: string; value: string | number })
 }
 
 const styles: Record<string, React.CSSProperties> = {
-    page: {
-        height: "calc(100vh - 100px)",
-        display: "flex",
-        flexDirection: "column",
-        gap: "16px",
-    },
     loading: {
         display: "flex",
         flexDirection: "column",
@@ -120,11 +114,6 @@ const styles: Record<string, React.CSSProperties> = {
         height: "100%",
         color: "var(--text-secondary)",
     },
-    header: {
-        display: "flex",
-        alignItems: "center",
-        gap: "16px",
-    },
     backBtn: {
         background: "none",
         border: "none",
@@ -132,6 +121,7 @@ const styles: Record<string, React.CSSProperties> = {
         cursor: "pointer",
         fontSize: "1rem",
         padding: "8px",
+        flexShrink: 0,
     },
     titleInfo: {
         display: "flex",
@@ -144,31 +134,6 @@ const styles: Record<string, React.CSSProperties> = {
     badge: {
         fontSize: "0.85rem",
         color: "var(--text-secondary)",
-    },
-    content: {
-        display: "flex",
-        flex: 1,
-        gap: "24px",
-        overflow: "hidden",
-    },
-    main: {
-        flex: 1,
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius)",
-        overflow: "hidden",
-    },
-    sidebar: {
-        width: "280px",
-        background: "var(--bg-card)",
-        borderRadius: "var(--radius)",
-        padding: "16px",
-        border: "1px solid var(--border)",
-    },
-    metricsGrid: {
-        display: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        gap: "12px",
-        marginTop: "16px",
     },
     metric: {
         display: "flex",
