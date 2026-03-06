@@ -813,6 +813,7 @@ class DebateWebSocketHandler:
                         mode=self.mode,
                         topic=self.topic,
                         user_position=self.user_position,
+                        coaching_goal=self.coaching_goal,
                         started_at=started_at,
                     )
                     db.add(db_session)
@@ -821,6 +822,7 @@ class DebateWebSocketHandler:
                     db_session.mode = self.mode
                     db_session.topic = self.topic
                     db_session.user_position = self.user_position
+                    db_session.coaching_goal = self.coaching_goal
                     if not db_session.started_at:
                         db_session.started_at = started_at
 

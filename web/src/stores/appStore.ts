@@ -4,6 +4,7 @@ import type { SessionMode } from "./debateStore";
 type DebatePosition = "for" | "against";
 type CoachingGoal = "confidence" | "speed" | "structure";
 type TTSProvider = "edge-tts" | "gemini" | "gtts" | "none";
+export type Theme = "dark" | "light" | "system";
 
 interface AppState {
   onboardingCompleted: boolean;
@@ -15,6 +16,7 @@ interface AppState {
   compactMetrics: boolean;
   ttsProvider: TTSProvider;
   ttsVoice: string;
+  theme: Theme;
   completeOnboarding: (payload: {
     preferredMode: SessionMode;
     preferredPosition: DebatePosition;
@@ -28,6 +30,7 @@ interface AppState {
   setCompactMetrics: (enabled: boolean) => void;
   setTtsProvider: (provider: TTSProvider) => void;
   setTtsVoice: (voice: string) => void;
+  setTheme: (theme: Theme) => void;
   resetOnboarding: () => void;
 }
 
@@ -44,6 +47,7 @@ type PersistedState = Pick<
   | "compactMetrics"
   | "ttsProvider"
   | "ttsVoice"
+  | "theme"
 >;
 
 const defaults: PersistedState = {
@@ -56,6 +60,7 @@ const defaults: PersistedState = {
   compactMetrics: false,
   ttsProvider: "edge-tts",
   ttsVoice: "en-US-GuyNeural",
+  theme: "dark" as Theme,
 };
 
 function loadPrefs(): PersistedState {
@@ -89,6 +94,7 @@ function persistedFromState(state: AppState): PersistedState {
     compactMetrics: state.compactMetrics,
     ttsProvider: state.ttsProvider,
     ttsVoice: state.ttsVoice,
+    theme: state.theme,
   };
 }
 
@@ -164,6 +170,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       return next;
     }),
 
+  setTheme: (theme) =>
+    set((s) => {
+      const next = { ...s, theme };
+      savePrefs(persistedFromState(next));
+      applyTheme(theme);
+      return next;
+    }),
+
   resetOnboarding: () =>
     set((s) => {
       const next = { ...s, onboardingCompleted: false };
@@ -171,3 +185,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       return next;
     }),
 }));
+
+/* ── Theme side-effect: set data-theme on <html> ── */
+function applyTheme(theme: Theme) {
+  if (typeof document === "undefined") return;
+  const resolved =
+    theme === "system"
+      ? window.matchMedia("(prefers-color-scheme: light)").matches
+        ? "light"
+        : "dark"
+      : theme;
+  document.documentElement.setAttribute("data-theme", resolved);
+}
+
+// Apply on load
+applyTheme(loadPrefs().theme ?? "dark");
+
+// Listen for system theme changes when set to "system"
+if (typeof window !== "undefined") {
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+    const current = useAppStore.getState().theme;
+    if (current === "system") applyTheme("system");
+  });
+}

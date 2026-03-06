@@ -11,6 +11,7 @@ interface SessionSummary {
   duration_seconds: number | null;
   user_wpm: number | null;
   overall_score: number | null;
+  coaching_goal: string | null;
 }
 
 function formatDuration(secs: number | null): string {

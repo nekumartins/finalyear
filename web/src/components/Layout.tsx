@@ -4,7 +4,7 @@
 import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import React from "react";
 import { useAuthStore } from "../stores/authStore";
-import { useAppStore } from "../stores/appStore";
+import { useAppStore, type Theme } from "../stores/appStore";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard" },
@@ -17,9 +17,18 @@ const navItems = [
 export function Layout() {
   const { user, logout } = useAuthStore();
   const profileName = useAppStore((s) => s.profileName);
+  const theme = useAppStore((s) => s.theme);
+  const setTheme = useAppStore((s) => s.setTheme);
   const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = React.useState(false);
+
+  const cycleTheme = () => {
+    const order: Theme[] = ["dark", "light", "system"];
+    const next = order[(order.indexOf(theme) + 1) % order.length];
+    setTheme(next);
+  };
+  const themeIcon = theme === "dark" ? "🌙" : theme === "light" ? "☀️" : "🖥️";
 
   // Close mobile menu on route change
   React.useEffect(() => {
@@ -76,6 +85,13 @@ export function Layout() {
 
           {user && (
             <div style={styles.userMenu}>
+              <button
+                onClick={cycleTheme}
+                title={`Theme: ${theme}`}
+                style={styles.themeBtn}
+              >
+                {themeIcon}
+              </button>
               <div style={styles.avatar} title={name}>
                 {initials}
               </div>
@@ -127,6 +143,13 @@ export function Layout() {
             </NavLink>
           ))}
           <div className="mobile-menu-divider" />
+          <button
+            className="mobile-menu-link"
+            onClick={cycleTheme}
+            style={{ border: "none", cursor: "pointer", fontSize: "0.95rem", textAlign: "left" }}
+          >
+            {themeIcon} Theme: {theme.charAt(0).toUpperCase() + theme.slice(1)}
+          </button>
           <button className="mobile-menu-signout" onClick={handleLogout}>Sign out</button>
         </div>
       )}
@@ -146,7 +169,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 24px",
     height: "60px",
     borderBottom: "1px solid var(--border)",
-    background: "rgba(7,7,15,0.8)",
+    background: "var(--bg-nav, rgba(7,7,15,0.8))",
     backdropFilter: "blur(20px)",
     WebkitBackdropFilter: "blur(20px)",
     position: "sticky",
@@ -234,6 +257,20 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "20px",
     cursor: "pointer",
     transition: "all 0.2s",
+  },
+  themeBtn: {
+    background: "var(--bg-glass)",
+    border: "1px solid var(--border)",
+    borderRadius: "50%",
+    width: 32,
+    height: 32,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "0.9rem",
+    cursor: "pointer",
+    transition: "all 0.2s",
+    padding: 0,
   },
   main: {
     flex: 1,

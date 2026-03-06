@@ -39,6 +39,7 @@ class Session(Base):
     mode = Column(Enum("cloud", "edge", name="session_mode"), nullable=False)
     topic = Column(Text, nullable=False)
     user_position = Column(String(10), nullable=False)
+    coaching_goal = Column(String(20), nullable=True)  # confidence | speed | structure
     started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     ended_at = Column(DateTime, nullable=True)
 

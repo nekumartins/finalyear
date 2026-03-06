@@ -1,12 +1,14 @@
 """
-REST API Router — Session history & health endpoints.
+REST API Router — Session history, stats & health endpoints.
 The real-time work happens over WebSocket; this is for:
   - Listing past sessions
   - Retrieving session details/metrics
+  - Aggregated stats (streak, bests, by-goal)
   - Health check
 
 All session endpoints are protected — users can only see their own sessions.
 """
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -115,9 +117,88 @@ async def list_sessions(
                 if isinstance(s.coaching_report, dict)
                 else None
             ),
+            "coaching_goal": s.coaching_goal,
         }
         for s in sessions
     ]
+
+
+@router.get("/stats")
+async def user_stats(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Aggregated stats for the current user — streak, bests, by-goal breakdown."""
+    result = await db.execute(
+        select(Session)
+        .where(Session.user_id == user.id)
+        .order_by(Session.started_at.desc())
+    )
+    sessions = result.scalars().all()
+
+    total = len(sessions)
+    total_minutes = sum((s.duration_seconds or 0) / 60 for s in sessions)
+
+    # WPM stats
+    wpm_vals = [s.user_wpm for s in sessions if s.user_wpm is not None]
+    avg_wpm = round(sum(wpm_vals) / len(wpm_vals)) if wpm_vals else 0
+    best_wpm = round(max(wpm_vals)) if wpm_vals else 0
+
+    # Score stats
+    scored = [
+        (s, s.coaching_report.get("overall_score"))
+        for s in sessions
+        if isinstance(s.coaching_report, dict) and s.coaching_report.get("overall_score") is not None
+    ]
+    scores = [sc for _, sc in scored]
+    avg_score = round(sum(scores) / len(scores), 1) if scores else None
+    best_score = max(scores) if scores else None
+
+    # Streak: consecutive calendar days with at least one session (including today)
+    day_set = set()
+    for s in sessions:
+        if s.started_at:
+            day_set.add(s.started_at.date())
+    streak = 0
+    d = datetime.now(timezone.utc).date()
+    while d in day_set:
+        streak += 1
+        from datetime import timedelta
+        d -= timedelta(days=1)
+
+    # Last-10 score sparkline
+    recent_scores = [sc for _, sc in scored[:10]]
+
+    # By-goal breakdown
+    goals: dict[str, dict] = {}
+    for s in sessions:
+        g = s.coaching_goal or "unknown"
+        if g not in goals:
+            goals[g] = {"sessions": 0, "scores": []}
+        goals[g]["sessions"] += 1
+        if isinstance(s.coaching_report, dict):
+            sc = s.coaching_report.get("overall_score")
+            if sc is not None:
+                goals[g]["scores"].append(sc)
+    by_goal = {
+        g: {
+            "sessions": info["sessions"],
+            "avg_score": round(sum(info["scores"]) / len(info["scores"]), 1) if info["scores"] else None,
+        }
+        for g, info in goals.items()
+    }
+
+    return {
+        "total_sessions": total,
+        "total_minutes": round(total_minutes, 1),
+        "avg_wpm": avg_wpm,
+        "best_wpm": best_wpm,
+        "avg_score": avg_score,
+        "best_score": best_score,
+        "streak": streak,
+        "recent_scores": recent_scores,
+        "by_goal": by_goal,
+    }
 
 
 @router.get("/sessions/{session_id}")
@@ -140,6 +221,7 @@ async def get_session(
         "topic": session.topic,
         "mode": session.mode,
         "user_position": session.user_position,
+        "coaching_goal": session.coaching_goal,
         "started_at": session.started_at.isoformat() if session.started_at else None,
         "ended_at": session.ended_at.isoformat() if session.ended_at else None,
         "duration_seconds": session.duration_seconds,

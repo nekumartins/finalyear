@@ -1,6 +1,6 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
-import { useAppStore } from "../stores/appStore";
+import { useAppStore, type Theme } from "../stores/appStore";
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -12,6 +12,7 @@ export function SettingsPage() {
     compactMetrics,
     ttsProvider,
     ttsVoice,
+    theme,
     setPreferredMode,
     setPreferredPosition,
     setCoachingGoal,
@@ -19,6 +20,7 @@ export function SettingsPage() {
     setCompactMetrics,
     setTtsProvider,
     setTtsVoice,
+    setTheme,
     resetOnboarding,
   } = useAppStore();
 
@@ -218,6 +220,31 @@ export function SettingsPage() {
 
       <section className="glass" style={styles.panel}>
         <h2 style={styles.heading}>App Preferences</h2>
+
+        <div style={styles.rowGroup}>
+          <label style={styles.label}>Theme</label>
+          <div style={styles.inlineChoices}>
+            <button
+              style={{ ...styles.pillBtn, ...(theme === "dark" ? styles.activePill : {}) }}
+              onClick={() => setTheme("dark")}
+            >
+              🌙 Dark
+            </button>
+            <button
+              style={{ ...styles.pillBtn, ...(theme === "light" ? styles.activePill : {}) }}
+              onClick={() => setTheme("light")}
+            >
+              ☀️ Light
+            </button>
+            <button
+              style={{ ...styles.pillBtn, ...(theme === "system" ? styles.activePill2 : {}) }}
+              onClick={() => setTheme("system")}
+            >
+              🖥️ System
+            </button>
+          </div>
+        </div>
+
         <div style={styles.toggleRow}>
           <div>
             <strong style={styles.toggleTitle}>Email Updates</strong>
