@@ -274,31 +274,36 @@ export function useWebSocket() {
         break;
 
       case "transcript_update":
-        if (msg.is_final) {
-          // Commit the user's finalized turn to the transcript array
-          const finalText = (msg.text as string || "").trim();
-          if (finalText) {
-            const now = Date.now();
-            useDebateStore.getState().appendTranscript({
-              speaker: "user",
-              text: finalText,
-              startMs: now - finalText.length * 20,
-              endMs: now,
-            });
-          }
-          setCurrentUserText("");
-        } else {
-          setCurrentUserText(msg.text as string);
-        }
+        // Both interim and final STT results just update the live preview.
+        // The user turn is committed to the transcript only when the AI
+        // actually starts responding (on first ai_response_chunk), which
+        // prevents duplicate entries from cumulative is_final updates.
+        setCurrentUserText(msg.text as string || "");
         break;
 
-      case "ai_response_chunk":
+      case "ai_response_chunk": {
+        // On the first AI token, commit the user's accumulated text as a
+        // single transcript entry — this ensures proper turn alternation.
+        const pendingState = useDebateStore.getState();
+        if (pendingState.currentUserText.trim() && !pendingState.currentAiText) {
+          const uText = pendingState.currentUserText.trim();
+          const now = Date.now();
+          pendingState.appendTranscript({
+            speaker: "user",
+            text: uText,
+            startMs: now - uText.length * 20,
+            endMs: now,
+          });
+          setCurrentUserText("");
+        }
+
         if (msg.is_final) {
           finalizeAiResponse();
         } else {
           appendAiText(msg.text as string);
         }
         break;
+      }
 
       case "turn_signal":
         setTurnSignal(
@@ -314,7 +319,21 @@ export function useWebSocket() {
         break;
       }
 
-      case "session_metrics":
+      case "session_metrics": {
+        // Commit any remaining user text before ending
+        const endState = useDebateStore.getState();
+        if (endState.currentUserText.trim()) {
+          const uText = endState.currentUserText.trim();
+          const now = Date.now();
+          endState.appendTranscript({
+            speaker: "user",
+            text: uText,
+            startMs: now - uText.length * 20,
+            endMs: now,
+          });
+          setCurrentUserText("");
+        }
+
         setMetrics({
           durationSeconds: msg.duration_seconds as number,
           userWpm: msg.user_wpm as number,
@@ -327,6 +346,7 @@ export function useWebSocket() {
           coachingReport: (msg.coaching_report as any) ?? null,
         });
         break;
+      }
 
       case "error":
         console.error("[WS] Server error:", msg.message);

@@ -554,6 +554,7 @@ class DebateWebSocketHandler:
                     user_position=self.user_position,
                     conversation_history=self.conversation_history,
                     voice=self.tts_voice,
+                    coaching_goal=self.coaching_goal,
                 ):
                     # Transcript text (from output_audio_transcription)
                     if chunk.text:
@@ -698,8 +699,9 @@ class DebateWebSocketHandler:
             ))
 
         finally:
-            # Reset for next user turn
-            self.current_user_text = ""
+            # current_user_text is intentionally NOT cleared here — any text
+            # the user spoke while the AI was responding is preserved so it
+            # can be picked up by the next turn-taking cycle.
             self._ai_responding = False
             self._barge_in_speech_ms = 0.0
 

@@ -27,23 +27,20 @@ export function Transcript() {
           <TranscriptBubble key={i} entry={entry} />
         ))}
 
+        {/* Live AI streaming (shown before new user speech — AI turn started first) */}
+        {currentAiText && (
+          <TranscriptBubble
+            entry={{ speaker: "ai", text: currentAiText, startMs: 0, endMs: 0 }}
+            isPartial
+          />
+        )}
+
         {/* Live user text (partial STT) */}
         {currentUserText && (
           <TranscriptBubble
             entry={{ speaker: "user", text: currentUserText, startMs: 0, endMs: 0 }}
             isPartial
           />
-        )}
-
-        {/* Live AI streaming or typing indicator */}
-        {currentAiText ? (
-          <TranscriptBubble
-            entry={{ speaker: "ai", text: currentAiText, startMs: 0, endMs: 0 }}
-            isPartial
-          />
-        ) : (
-          /* Show typing indicator when AI turn is active but no text yet */
-          null
         )}
 
         <div ref={bottomRef} />

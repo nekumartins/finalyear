@@ -286,6 +286,7 @@ class GeminiNativeAudioService(TTSService):
         user_position: str,
         conversation_history: list[dict],
         voice: str = "default",
+        coaching_goal: str = "confidence",
     ) -> AsyncIterator[DebateResponseChunk]:
         """
         Unified generation: model thinks + speaks in one Live API session.
@@ -294,7 +295,11 @@ class GeminiNativeAudioService(TTSService):
         from google import genai
         from google.genai import types
         from backend.app.config import get_settings
-        from backend.app.services.llm_service import DEBATE_SYSTEM_PROMPT, truncate_history
+        from backend.app.services.llm_service import (
+            DEBATE_SYSTEM_PROMPT,
+            COACHING_GOAL_INSTRUCTIONS,
+            truncate_history,
+        )
 
         settings = get_settings()
         if not settings.gemini_api_key:
@@ -308,8 +313,10 @@ class GeminiNativeAudioService(TTSService):
             logger.warning(f"[NativeAudio] Unknown voice '{voice_name}', using default")
             voice_name = self.DEFAULT_VOICE
 
+        coaching_instruction = COACHING_GOAL_INSTRUCTIONS.get(coaching_goal, "")
         system_prompt = DEBATE_SYSTEM_PROMPT.format(
             topic=topic, position=user_position,
+            coaching_instruction=coaching_instruction,
         )
 
         # Convert OpenAI-format history to Live API turns
