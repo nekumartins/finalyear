@@ -54,7 +54,7 @@ function ElapsedTimer({ startTime }: { startTime: number }) {
 export function DebatePage() {
   const navigate = useNavigate();
   const { topic, userPosition, mode, sessionId, status } = useDebateStore();
-  const { ttsProvider, ttsVoice } = useAppStore();
+  const { ttsProvider, ttsVoice, coachingGoal } = useAppStore();
   const { startSession, sendAudioChunk, endSession } = useWebSocket();
   const { isPlaying: isAiSpeaking, enqueue: enqueueAudio, stop: stopTtsAudio } = useAudioPlayback();
   const [sessionStart] = useState(Date.now());
@@ -86,7 +86,7 @@ export function DebatePage() {
       navigate("/new-debate");
       return;
     }
-    startSession(topic, userPosition, mode, ttsProvider, ttsVoice);
+    startSession(topic, userPosition, mode, ttsProvider, ttsVoice, coachingGoal);
   }, []);
 
   // Start audio capture once session is active

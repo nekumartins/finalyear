@@ -206,7 +206,7 @@ export function useWebSocket() {
   // ── Typed send helpers ──
 
   const startSession = useCallback(
-    (topic: string, userPosition: string, mode: "cloud" | "edge", ttsProvider?: string, ttsVoice?: string) => {
+    (topic: string, userPosition: string, mode: "cloud" | "edge", ttsProvider?: string, ttsVoice?: string, coachingGoal?: string) => {
       // Save for reconnection
       lastSessionRef.current = { sessionId: "", topic, userPosition, mode };
 
@@ -225,6 +225,7 @@ export function useWebSocket() {
             mode,
             tts_provider: ttsProvider || "edge-tts",
             tts_voice: ttsVoice || "default",
+            coaching_goal: coachingGoal || "confidence",
           });
         } else if (attempts < 50) { // Timeout after ~5s
           attempts++;
@@ -323,6 +324,7 @@ export function useWebSocket() {
           avgPauseDurationMs: msg.avg_pause_duration_ms as number,
           turnCount: msg.turn_count as number,
           userTalkRatio: msg.user_talk_ratio as number,
+          coachingReport: (msg.coaching_report as any) ?? null,
         });
         break;
 

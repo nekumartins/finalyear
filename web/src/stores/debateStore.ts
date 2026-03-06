@@ -31,6 +31,17 @@ export interface SessionMetrics {
   avgPauseDurationMs: number;
   turnCount: number;
   userTalkRatio: number;
+  coachingReport: CoachingReport | null;
+}
+
+export interface CoachingReport {
+  overall_score: number;
+  argument_quality: number;
+  strengths: string[];
+  improvements: string[];
+  fallacies: string[];
+  tips: string[];
+  summary: string;
 }
 
 interface DebateState {
@@ -150,6 +161,7 @@ export const useDebateStore = create<DebateState>((set, get) => ({
           avgPauseDurationMs: data.avg_pause_duration_ms,
           turnCount: data.turn_count,
           userTalkRatio: data.user_talk_ratio,
+          coachingReport: data.coaching_report || null,
         },
       });
       return true;

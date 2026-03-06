@@ -52,6 +52,9 @@ class Session(Base):
     turn_count = Column(Integer, nullable=True)
     user_talk_ratio = Column(Float, nullable=True)
 
+    # AI coaching report (structured JSON generated post-session)
+    coaching_report = Column(JSON, nullable=True)
+
     # Relationships
     user = relationship("User", back_populates="sessions")
     transcript_entries = relationship("TranscriptEntry", back_populates="session", cascade="all, delete-orphan")

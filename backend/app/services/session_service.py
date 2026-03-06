@@ -53,6 +53,7 @@ class SessionService:
         session.avg_pause_duration_ms = metrics.get("avg_pause_duration_ms", 0)
         session.turn_count = metrics.get("turn_count", 0)
         session.user_talk_ratio = metrics.get("user_talk_ratio", 0)
+        session.coaching_report = metrics.get("coaching_report")
         await db.flush()
         return session
 

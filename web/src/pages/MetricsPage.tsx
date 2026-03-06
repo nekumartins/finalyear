@@ -3,7 +3,7 @@
  */
 import React from "react";
 import { useNavigate } from "react-router-dom";
-import { useDebateStore } from "../stores/debateStore";
+import { useDebateStore, type CoachingReport } from "../stores/debateStore";
 import { MetricsCard } from "../components/MetricsCard";
 
 /** Animated circular progress ring for talk ratio */
@@ -81,6 +81,185 @@ const ringStyles: Record<string, React.CSSProperties> = {
   },
 };
 
+/** Score badge for coaching report */
+function ScoreRing({ score, label }: { score: number; label: string }) {
+  const r = 36;
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference * (1 - score / 100);
+  const color = score >= 70 ? "var(--success)" : score >= 50 ? "var(--warning)" : "var(--danger)";
+
+  return (
+    <div style={{ textAlign: "center" }}>
+      <svg width="90" height="90" viewBox="0 0 90 90">
+        <circle cx="45" cy="45" r={r} fill="none" stroke="var(--border)" strokeWidth="7" />
+        <circle
+          cx="45" cy="45" r={r} fill="none" stroke={color} strokeWidth="7"
+          strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset}
+          transform="rotate(-90 45 45)"
+          style={{ transition: "stroke-dashoffset 1s ease" }}
+        />
+        <text x="45" y="41" textAnchor="middle" fill="var(--text-primary)" fontSize="20" fontWeight="800"
+          fontFamily="Plus Jakarta Sans, sans-serif">{score}</text>
+        <text x="45" y="56" textAnchor="middle" fill="var(--text-muted)" fontSize="8"
+          fontFamily="Plus Jakarta Sans, sans-serif">/100</text>
+      </svg>
+      <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)", fontWeight: 600, marginTop: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        {label}
+      </div>
+    </div>
+  );
+}
+
+/** Coaching report display */
+function CoachingSection({ report }: { report: CoachingReport }) {
+  return (
+    <div className="glass" style={styles.section}>
+      <h3 style={styles.sectionTitle}>🎯 AI Coaching Report</h3>
+
+      {/* Score rings */}
+      <div style={coachStyles.scoresRow}>
+        <ScoreRing score={report.overall_score} label="Overall" />
+        <ScoreRing score={report.argument_quality * 10} label="Argument" />
+      </div>
+
+      {/* Summary */}
+      <p style={coachStyles.summary}>{report.summary}</p>
+
+      {/* Strengths */}
+      {report.strengths.length > 0 && (
+        <div style={coachStyles.listSection}>
+          <h4 style={coachStyles.listTitle}>💪 Strengths</h4>
+          {report.strengths.map((s, i) => (
+            <div key={i} style={coachStyles.listItem}>
+              <span style={coachStyles.bulletGreen}>✓</span>
+              <span>{s}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Areas for Improvement */}
+      {report.improvements.length > 0 && (
+        <div style={coachStyles.listSection}>
+          <h4 style={coachStyles.listTitle}>📈 Areas to Improve</h4>
+          {report.improvements.map((s, i) => (
+            <div key={i} style={coachStyles.listItem}>
+              <span style={coachStyles.bulletOrange}>→</span>
+              <span>{s}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Fallacies */}
+      {report.fallacies.length > 0 && (
+        <div style={coachStyles.listSection}>
+          <h4 style={coachStyles.listTitle}>⚠️ Logical Fallacies Detected</h4>
+          {report.fallacies.map((s, i) => (
+            <div key={i} style={coachStyles.listItem}>
+              <span style={coachStyles.bulletRed}>!</span>
+              <span>{s}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Tips */}
+      {report.tips.length > 0 && (
+        <div style={coachStyles.listSection}>
+          <h4 style={coachStyles.listTitle}>💡 Personalized Tips</h4>
+          {report.tips.map((s, i) => (
+            <div key={i} style={{ ...coachStyles.listItem, ...coachStyles.tipItem }}>
+              <span style={coachStyles.tipNumber}>{i + 1}</span>
+              <span>{s}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const coachStyles: Record<string, React.CSSProperties> = {
+  scoresRow: {
+    display: "flex",
+    gap: "32px",
+    justifyContent: "center",
+    marginBottom: "20px",
+  },
+  summary: {
+    fontSize: "0.95rem",
+    lineHeight: 1.6,
+    color: "var(--text-secondary)",
+    textAlign: "center",
+    padding: "0 16px",
+    marginBottom: "20px",
+    fontStyle: "italic",
+  },
+  listSection: {
+    marginBottom: "16px",
+  },
+  listTitle: {
+    fontSize: "0.85rem",
+    fontWeight: 700,
+    color: "var(--text-primary)",
+    marginBottom: "10px",
+  },
+  listItem: {
+    display: "flex",
+    gap: "10px",
+    alignItems: "flex-start",
+    fontSize: "0.875rem",
+    lineHeight: 1.5,
+    color: "var(--text-secondary)",
+    marginBottom: "8px",
+  },
+  bulletGreen: {
+    color: "var(--success)",
+    fontWeight: 700,
+    flexShrink: 0,
+    fontSize: "0.9rem",
+  },
+  bulletOrange: {
+    color: "var(--warning)",
+    fontWeight: 700,
+    flexShrink: 0,
+    fontSize: "0.9rem",
+  },
+  bulletRed: {
+    color: "var(--danger)",
+    fontWeight: 700,
+    flexShrink: 0,
+    width: "18px",
+    height: "18px",
+    borderRadius: "50%",
+    background: "rgba(239,68,68,0.15)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "0.7rem",
+  },
+  tipItem: {
+    padding: "10px 14px",
+    borderRadius: "10px",
+    background: "rgba(124,111,239,0.06)",
+    border: "1px solid rgba(124,111,239,0.15)",
+  },
+  tipNumber: {
+    width: "22px",
+    height: "22px",
+    borderRadius: "50%",
+    background: "var(--gradient)",
+    color: "white",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "0.7rem",
+    fontWeight: 700,
+    flexShrink: 0,
+  },
+};
+
 export function MetricsPage() {
   const navigate = useNavigate();
   const { metrics, topic, transcript } = useDebateStore();
@@ -147,6 +326,11 @@ export function MetricsPage() {
           </button>
         </div>
       </div>
+
+      {/* ── AI Coaching Report ── */}
+      {metrics.coachingReport && (
+        <CoachingSection report={metrics.coachingReport} />
+      )}
 
       {/* ── Filler word breakdown ── */}
       {Object.keys(metrics.fillerWords).length > 0 && (

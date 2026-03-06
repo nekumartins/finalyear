@@ -61,6 +61,35 @@ export function SessionPage() {
                     ) : (
                         <p style={{ color: "var(--text-secondary)" }}>No metrics available</p>
                     )}
+
+                    {/* Coaching Report Summary */}
+                    {metrics?.coachingReport && (
+                        <div style={{ marginTop: "20px" }}>
+                            <h3 style={{ fontSize: "0.9rem", marginBottom: "10px" }}>🎯 Coaching</h3>
+                            <div style={{
+                                textAlign: "center",
+                                padding: "12px",
+                                background: "var(--bg-secondary)",
+                                borderRadius: "10px",
+                                marginBottom: "10px",
+                            }}>
+                                <div style={{ fontSize: "1.5rem", fontWeight: 800 }}>
+                                    {metrics.coachingReport.overall_score}
+                                </div>
+                                <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>
+                                    Overall Score
+                                </div>
+                            </div>
+                            <p style={{
+                                fontSize: "0.8rem",
+                                color: "var(--text-secondary)",
+                                lineHeight: 1.5,
+                                fontStyle: "italic",
+                            }}>
+                                {metrics.coachingReport.summary}
+                            </p>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

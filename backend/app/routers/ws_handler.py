@@ -44,6 +44,7 @@ from backend.app.schemas.messages import (
 from backend.app.services.latency_tracker import LatencyTracker
 from backend.app.services.llm_service import get_llm_service
 from backend.app.services.metrics_service import metrics_service
+from backend.app.services.coaching_service import coaching_service
 from backend.app.services.stt_service import get_stt_service
 from backend.app.services.tts_service import get_tts_service, GeminiNativeAudioService
 from backend.app.services.turn_taking_service import get_turn_taking_service
@@ -68,6 +69,7 @@ class DebateWebSocketHandler:
         self.mode: str = "cloud"
         self.topic: str = ""
         self.user_position: str = ""
+        self.coaching_goal: str = "confidence"
         self.transcript: list[TranscriptEntry] = []
         self.session_start_time: float = 0
         self.current_user_text: str = ""
@@ -222,6 +224,7 @@ class DebateWebSocketHandler:
         self.mode = msg.mode.value
         self.topic = msg.topic
         self.user_position = msg.user_position
+        self.coaching_goal = msg.coaching_goal
         self.session_start_time = time.time()
         self.transcript = []
         self.conversation_history = []
@@ -612,6 +615,7 @@ class DebateWebSocketHandler:
                     topic=self.topic,
                     user_position=self.user_position,
                     conversation_history=self.conversation_history,
+                    coaching_goal=self.coaching_goal,
                 ):
                     if not first_token_logged:
                         self.latency.record("llm_first_token")
@@ -745,6 +749,20 @@ class DebateWebSocketHandler:
         metrics["transcript"] = [e.model_dump() for e in self.transcript]
         metrics["latency_report"] = self.latency.get_report()
 
+        # Generate AI coaching report (non-blocking — session still ends if this fails)
+        coaching_report = None
+        try:
+            coaching_report = await coaching_service.generate_report(
+                transcript=self.transcript,
+                metrics=metrics,
+                topic=self.topic,
+                user_position=self.user_position,
+                coaching_goal=self.coaching_goal,
+            )
+        except Exception as e:
+            logger.warning(f"[Session] Coaching report generation failed: {e}")
+        metrics["coaching_report"] = coaching_report
+
         # Persist authenticated sessions for history view.
         await self._persist_session(metrics, duration)
 
@@ -813,6 +831,7 @@ class DebateWebSocketHandler:
                 db_session.avg_pause_duration_ms = metrics.get("avg_pause_duration_ms", 0)
                 db_session.turn_count = metrics.get("turn_count", 0)
                 db_session.user_talk_ratio = metrics.get("user_talk_ratio", 0)
+                db_session.coaching_report = metrics.get("coaching_report")
 
                 # Replace transcript rows on re-end to avoid duplicates.
                 await db.execute(

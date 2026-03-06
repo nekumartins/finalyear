@@ -33,7 +33,31 @@ Your role:
 4. Be challenging but constructive — help them improve.
 5. If they make a strong point, acknowledge it briefly before countering.
 6. Never break character. Never refuse to debate. Stay on topic.
-"""
+{coaching_instruction}"""
+
+# Coaching goal → additional instruction injected into the debate system prompt.
+# This adapts the AI opponent's behaviour to train the user's chosen skill.
+COACHING_GOAL_INSTRUCTIONS = {
+    "confidence": (
+        "\nAdditional coaching focus — CONFIDENCE: "
+        "Push back firmly on weak arguments. When the user hedges or sounds "
+        "uncertain, challenge them to commit. Acknowledge strong, assertive "
+        "statements to reinforce confident delivery."
+    ),
+    "speed": (
+        "\nAdditional coaching focus — PACING: "
+        "Keep your responses punchy and fast. If the user pauses too long, "
+        "jump in quickly. Model brisk, flowing speech patterns to push "
+        "the user toward faster, more fluid delivery."
+    ),
+    "structure": (
+        "\nAdditional coaching focus — STRUCTURE: "
+        "Systematically attack the weakest link in the user's argument chain. "
+        "If they skip evidence or make logical leaps, call it out. Model "
+        "claim-evidence-reasoning structure in your own responses."
+    ),
+}
+
 
 # Maximum number of conversation history messages to send to the LLM.
 # Keeps the prompt within context window limits and reduces token cost.
@@ -62,6 +86,7 @@ class LLMService(ABC):
         topic: str,
         user_position: str,
         conversation_history: list[dict],
+        coaching_goal: str = "confidence",
     ) -> AsyncGenerator[str, None]:
         """Yields streamed tokens of the AI counter-argument."""
         ...
@@ -83,10 +108,13 @@ class CloudLLMService(LLMService):
         self.model = "llama-3.3-70b-versatile"
 
     async def generate_response_stream(
-        self, user_text, topic, user_position, conversation_history
+        self, user_text, topic, user_position, conversation_history,
+        coaching_goal="confidence",
     ) -> AsyncGenerator[str, None]:
+        coaching_instruction = COACHING_GOAL_INSTRUCTIONS.get(coaching_goal, "")
         system_prompt = DEBATE_SYSTEM_PROMPT.format(
-            topic=topic, position=user_position
+            topic=topic, position=user_position,
+            coaching_instruction=coaching_instruction,
         )
 
         # Truncate history to prevent context window overflow.
@@ -149,12 +177,14 @@ class CloudLLMService(LLMService):
         raise last_error
 
     async def generate_response_batch(
-        self, user_text: str, topic: str, user_position: str, conversation_history: list[dict]
+        self, user_text: str, topic: str, user_position: str, conversation_history: list[dict],
+        coaching_goal: str = "confidence",
     ) -> str:
         """Non-streaming version for testing."""
         full = ""
         async for token in self.generate_response_stream(
-            user_text, topic, user_position, conversation_history
+            user_text, topic, user_position, conversation_history,
+            coaching_goal=coaching_goal,
         ):
             full += token
         return full
@@ -174,10 +204,12 @@ class EdgeLLMService(LLMService):
         self._cloud_fallback = CloudLLMService()
 
     async def generate_response_stream(
-        self, user_text, topic, user_position, conversation_history
+        self, user_text, topic, user_position, conversation_history,
+        coaching_goal="confidence",
     ) -> AsyncGenerator[str, None]:
         async for token in self._cloud_fallback.generate_response_stream(
-            user_text, topic, user_position, conversation_history
+            user_text, topic, user_position, conversation_history,
+            coaching_goal=coaching_goal,
         ):
             yield token
 

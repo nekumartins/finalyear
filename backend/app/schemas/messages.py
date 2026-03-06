@@ -40,6 +40,7 @@ class StartSessionMsg(BaseModel):
     user_position: str = Field(..., description="User's stance: 'for' or 'against'")
     tts_provider: str = Field(default="edge-tts", description="TTS provider: edge-tts, gtts, none")
     tts_voice: str = Field(default="default", description="TTS voice ID")
+    coaching_goal: str = Field(default="confidence", description="Coaching focus: confidence, speed, or structure")
 
 
 class AudioChunkMsg(BaseModel):
@@ -125,6 +126,7 @@ class SessionMetricsMsg(BaseModel):
     user_talk_ratio: float = Field(..., ge=0.0, le=1.0)
     transcript: list[TranscriptEntry] = Field(default_factory=list)
     latency_report: dict = Field(default_factory=dict)
+    coaching_report: Optional[dict] = Field(default=None, description="AI coaching feedback (score, strengths, tips)")
 
 
 class TranscriptEntry(BaseModel):

@@ -145,6 +145,7 @@ async def get_session(
         "avg_pause_duration_ms": session.avg_pause_duration_ms,
         "turn_count": session.turn_count,
         "user_talk_ratio": session.user_talk_ratio,
+        "coaching_report": session.coaching_report,
         "transcript": [
             {
                 "speaker": t.speaker,
