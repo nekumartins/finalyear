@@ -91,7 +91,7 @@ function TranscriptBubble({
       </div>
 
       {/* Bubble */}
-      <div style={styles.bubbleCol}>
+      <div className="transcript-bubble-col" style={{ alignSelf: isUser ? "flex-end" : "flex-start" }}>
         <span style={{ ...styles.speakerLabel, textAlign: isUser ? "right" : "left" }}>
           {isUser ? "You" : "AI Coach"}
           {isPartial && " · "}
@@ -109,7 +109,7 @@ function TranscriptBubble({
             opacity: isPartial ? 0.75 : 1,
           }}
         >
-          <p style={styles.bubbleText}>{entry.text}</p>
+          <p className="transcript-bubble-text">{entry.text}</p>
         </div>
       </div>
     </div>
@@ -173,13 +173,6 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     flexShrink: 0,
   },
-  bubbleCol: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "4px",
-    maxWidth: "72%",
-    flex: 1,
-  },
   speakerLabel: {
     fontSize: "0.72rem",
     color: "var(--text-muted)",
@@ -200,10 +193,5 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "10px 14px",
     borderRadius: "14px",
     boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
-  },
-  bubbleText: {
-    fontSize: "0.9rem",
-    lineHeight: 1.55,
-    margin: 0,
   },
 };

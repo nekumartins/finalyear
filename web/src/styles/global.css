@@ -580,3 +580,52 @@ select:focus {
     flex: none;
   }
 }
+
+/* ── Transcript component ─────────────────────────── */
+.transcript-bubble-text {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  margin: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.transcript-bubble-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 72%;
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── DebatePage transcript area ───────────────────── */
+.debate-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: calc(100vh - 130px);
+  animation: fadeSlideUp 0.35s ease;
+}
+
+.debate-transcript-area {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 640px) {
+  .debate-page {
+    height: auto;
+    min-height: calc(100dvh - 80px);
+  }
+
+  .debate-transcript-area {
+    min-height: 320px;
+    flex: none;
+  }
+
+  .transcript-bubble-col {
+    max-width: 82%;
+  }
+}

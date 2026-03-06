@@ -129,7 +129,7 @@ export function DebatePage() {
   };
 
   return (
-    <div style={styles.page}>
+    <div className="debate-page">
       {/* ── Header card ── */}
       <div className="glass" style={styles.header}>
         <div style={styles.headerLeft}>
@@ -202,7 +202,7 @@ export function DebatePage() {
       <TurnIndicator />
 
       {/* ── Transcript (fills remaining height) ── */}
-      <div style={styles.transcriptArea}>
+      <div className="debate-transcript-area">
         <Transcript />
       </div>
     </div>
@@ -210,13 +210,6 @@ export function DebatePage() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  page: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "14px",
-    height: "calc(100vh - 130px)",
-    animation: "fadeSlideUp 0.35s ease",
-  },
   header: {
     display: "flex",
     justifyContent: "space-between",
@@ -343,10 +336,5 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "0.875rem",
     color: "var(--accent)",
     fontWeight: 600,
-  },
-  transcriptArea: {
-    flex: 1,
-    minHeight: 0,
-    overflow: "hidden",
   },
 };
