@@ -42,6 +42,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend/
 COPY shared/ ./shared/
 
+# Copy Alembic config so `alembic upgrade head` works inside the container
+COPY alembic.ini ./alembic.ini
+
 # Copy built frontend from stage 1
 COPY --from=frontend-build /build/dist ./static/
 
