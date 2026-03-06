@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { LandingPage } from "./pages/LandingPage";
 import { HomePage } from "./pages/HomePage";
 import { DebatePage } from "./pages/DebatePage";
 import { MetricsPage } from "./pages/MetricsPage";
@@ -25,7 +26,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
       <BrowserRouter>
         <Routes>
-          {/* Public route */}
+          {/* Public routes */}
+          <Route path="/" element={<LandingPage />} />
           <Route path="/auth" element={<AuthPage />} />
 
           {/* Protected routes */}
@@ -33,7 +35,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="/onboarding" element={<OnboardingPage />} />
             <Route element={<OnboardingGuard />}>
               <Route element={<Layout />}>
-                <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/new-debate" element={<HomePage />} />
                 <Route path="/debate" element={<DebatePage />} />
@@ -45,6 +46,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               </Route>
             </Route>
           </Route>
+
+          {/* Catch-all */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
     </GoogleOAuthProvider>
