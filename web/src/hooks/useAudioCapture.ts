@@ -86,12 +86,13 @@ export function useAudioCapture({
       processorRef.current = processor;
 
       processor.onaudioprocess = (event) => {
-        let float32 = event.inputBuffer.getChannelData(0);
+        const raw = event.inputBuffer.getChannelData(0);
 
         // Resample to target rate if browser gave a different rate
-        if (actualRate !== sampleRate) {
-          float32 = resample(float32, actualRate, sampleRate);
-        }
+        const float32 =
+          actualRate !== sampleRate
+            ? resample(raw, actualRate, sampleRate)
+            : raw;
 
         // Convert Float32 → PCM16
         const pcm16 = new Int16Array(float32.length);
